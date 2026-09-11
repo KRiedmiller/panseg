@@ -4,12 +4,49 @@ import pytest
 
 from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.functionals.training.train import find_h5_files
-from panseg.viewer_napari.widgets.training import Training_Tab
+from panseg.viewer_napari.widgets.training import (
+    NONE_LICENSE,
+    Training_Tab,
+)
 
 
 @pytest.fixture
 def training_tab():
     return Training_Tab(None)
+
+
+@pytest.fixture
+def shown_training_tab(training_tab, qtbot):
+    """A training tab whose container is shown, so visibility can be asserted."""
+    qtbot.addWidget(training_tab.widget_unet_training.native)
+    training_tab.widget_unet_training.show()
+    return training_tab
+
+
+def invoke_training(tab, **overrides):
+    kwargs = dict(
+        from_disk="Disk",
+        dataset="dataset/data",
+        image=None,
+        segmentation=None,
+        pretrained=None,
+        model_name="test_model",
+        description="description",
+        channels=(1, 1),
+        feature_maps=[16],
+        patch_size=[16, 64, 64],
+        resolution=[1.0, 1.0, 1.0],
+        max_num_iters=100,
+        dimensionality="3D",
+        device="cpu",
+        modality="confocal",
+        custom_modality="",
+        output_type="boundaries",
+        custom_output_type="",
+        pbar=None,
+    )
+    kwargs.update(overrides)
+    tab.widget_unet_training(**kwargs)
 
 
 def test_get_container(training_tab):
@@ -498,6 +535,7 @@ def test_on_dimensionality_change(training_tab):
 
 
 def test_on_custom_modality_change(training_tab, mocker):
+    training_tab.toggle_visibility_metadata(True)
     m_show = mocker.patch.object(
         training_tab.widget_unet_training.custom_modality, "show"
     )
@@ -515,6 +553,7 @@ def test_on_custom_modality_change(training_tab, mocker):
 
 
 def test_on_custom_output_type_change(training_tab, mocker):
+    training_tab.toggle_visibility_metadata(True)
     m_show = mocker.patch.object(
         training_tab.widget_unet_training.custom_output_type, "show"
     )
@@ -845,3 +884,144 @@ def test_device_choices_exclude_mps_when_unavailable(mocker):
     tab = Training_Tab(None)
 
     assert "mps" not in tab.ALL_DEVICES
+
+
+def test_metadata_fields_present(training_tab):
+    w = training_tab.widget_unet_training
+    assert w.license.value == NONE_LICENSE
+
+
+def test_sections_initial_state(shown_training_tab):
+    tab = shown_training_tab
+    assert tab.train_data_open
+    assert not tab.meta_data_open
+    assert not tab.widget_show_train_data.visible
+    assert tab.widget_show_metadata.visible
+    assert tab.widget_unet_training.from_disk.visible
+    assert tab.widget_unet_training.dataset.visible
+    assert tab.widget_unet_training.channels.visible
+    assert tab.widget_unet_training.resolution.visible
+    for widget in tab.model_widgets:
+        assert widget.visible
+    for widget in tab.meta_data_widgets:
+        assert not widget.visible
+
+
+def test_open_metadata_collapses_train_data_and_model(shown_training_tab):
+    tab = shown_training_tab
+    tab.toggle_visibility_metadata(True)
+
+    assert tab.meta_data_open
+    assert not tab.train_data_open
+    assert not tab.widget_show_metadata.visible
+    assert tab.widget_show_train_data.visible
+    for widget in tab.train_data_widgets + tab.model_widgets:
+        assert not widget.visible
+    assert tab.widget_unet_training.model_name.visible
+    assert tab.widget_unet_training.description.visible
+    assert tab.widget_unet_training.modality.visible
+    assert tab.widget_unet_training.output_type.visible
+    assert tab.widget_unet_training.authors.visible
+    assert tab.widget_unet_training.additional_citations.visible
+    assert tab.widget_unet_training.license.visible
+    assert tab.widget_unet_training.documentation.visible
+
+
+def test_open_train_data_collapses_metadata(shown_training_tab):
+    tab = shown_training_tab
+    tab.toggle_visibility_metadata(True)
+    tab.toggle_visibility_train_data(True)
+
+    assert tab.train_data_open
+    assert not tab.meta_data_open
+    assert tab.widget_unet_training.from_disk.visible
+    assert tab.widget_unet_training.dataset.visible
+    assert tab.widget_unet_training.channels.visible
+    assert tab.widget_unet_training.resolution.visible
+    for widget in tab.model_widgets:
+        assert widget.visible
+    assert not tab.widget_show_train_data.visible
+    assert tab.widget_show_metadata.visible
+    for widget in tab.meta_data_widgets:
+        assert not widget.visible
+
+
+def test_show_buttons_open_sections(shown_training_tab):
+    tab = shown_training_tab
+    tab.widget_show_metadata.clicked()
+    assert tab.meta_data_open
+    assert not tab.train_data_open
+
+    tab.widget_show_train_data.clicked()
+    assert tab.train_data_open
+    assert not tab.meta_data_open
+
+
+def test_custom_widgets_restored_on_section_open(shown_training_tab):
+    tab = shown_training_tab
+    tab.widget_unet_training.output_type.value = tab.CUSTOM
+    tab.widget_unet_training.modality.value = tab.CUSTOM
+    # The meta data section is collapsed, so the custom widgets must not leak
+    assert not tab.widget_unet_training.custom_output_type.visible
+    assert not tab.widget_unet_training.custom_modality.visible
+
+    tab.toggle_visibility_metadata(True)
+    assert tab.widget_unet_training.custom_output_type.visible
+    assert tab.widget_unet_training.custom_modality.visible
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("authors", "Name <not-an-email>"),
+        ("additional_citations", "no identifier here"),
+    ],
+)
+def test_unet_training_invalid_metadata(shown_training_tab, mocker, field, value):
+    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
+    m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
+    getattr(shown_training_tab.widget_unet_training, field).value = value
+
+    invoke_training(shown_training_tab)
+
+    m_log.assert_called_once()
+    assert m_log.call_args.kwargs.get("level") == "ERROR"
+    m_schedule.assert_not_called()
+
+
+def test_unet_training_none_license_maps_to_none(shown_training_tab, mocker, tmp_path):
+    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
+    m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
+    mocker.patch(
+        "panseg.viewer_napari.widgets.training.PATH_PANSEG_MODELS", new=tmp_path
+    )
+    shown_training_tab.widget_unet_training.license.value = NONE_LICENSE
+
+    invoke_training(shown_training_tab)
+
+    m_log.assert_called_with("Starting training task", thread="train_gui")
+    task_kwargs = m_schedule.call_args.kwargs["task_kwargs"]
+    assert task_kwargs["license"] is None
+    assert task_kwargs["authors"] == ""
+
+
+def test_unet_training_fair_metadata_in_task_kwargs(shown_training_tab, mocker):
+    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
+    m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
+    shown_training_tab.widget_unet_training.authors.value = (
+        "Jane Doe <jane@example.com>\nJohn Smith"
+    )
+    shown_training_tab.widget_unet_training.additional_citations.value = (
+        "10.1234/x.y Smith, J. et al."
+    )
+    shown_training_tab.widget_unet_training.license.value = "MIT"
+    shown_training_tab.widget_unet_training.documentation.value = "A very good model."
+
+    invoke_training(shown_training_tab)
+
+    m_log.assert_called_with("Starting training task", thread="train_gui")
+    task_kwargs = m_schedule.call_args.kwargs["task_kwargs"]
+    assert task_kwargs["authors"] == "Jane Doe <jane@example.com>\nJohn Smith"
+    assert task_kwargs["additional_citations"] == "10.1234/x.y Smith, J. et al."
+    assert task_kwargs["license"] == "MIT"
+    assert task_kwargs["documentation"] == "A very good model."

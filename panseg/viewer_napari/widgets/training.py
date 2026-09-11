@@ -4,12 +4,23 @@ from typing import Literal, Optional
 import torch
 from magicgui import magic_factory, widgets
 from magicgui.types import Undefined
-from magicgui.widgets import Container, FileEdit, Label, ProgressBar
+from magicgui.widgets import (
+    Container,
+    FileEdit,
+    Label,
+    ProgressBar,
+    PushButton,
+)
 from napari.layers import Image, Labels
 
 from panseg import PATH_PANSEG_MODELS, logger
 from panseg.core.image import ImageLayout, PanSegImage, SemanticType
 from panseg.core.zoo import model_zoo
+from panseg.functionals.training.biio import (
+    PANSEG_CITATION,
+    parse_authors,
+    parse_citations,
+)
 from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.functionals.training.train import find_h5_files
 from panseg.io.h5 import read_h5_shape, read_h5_voxel_size
@@ -17,6 +28,22 @@ from panseg.tasks.training_tasks import unet_training_task
 from panseg.viewer_napari import log
 from panseg.viewer_napari.widgets.prediction import Prediction_Widgets
 from panseg.viewer_napari.widgets.utils import div, get_layers, schedule_task
+
+NONE_LICENSE = "(none)"
+LICENSE_CHOICES = [
+    NONE_LICENSE,
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Apache-2.0",
+    "GPL-3.0-only",
+    "LGPL-3.0-only",
+    "CC0-1.0",
+    "CC-BY-4.0",
+    "CC-BY-SA-4.0",
+    "CC-BY-NC-4.0",
+    "Unlicense",
+]
 
 
 class Training_Tab:
@@ -33,13 +60,20 @@ class Training_Tab:
 
         self.previous_z_patch_size = 16
 
+        # Section visibility state
+        self.train_data_open = True
+        self.meta_data_open = False
+
         # initialize widgets
         self.widget_unet_training = self.factory_unet_training()
         self.widget_unet_training.self.bind(self)
 
-        self.widget_unet_training.insert(0, div("Training Data", False))
-        self.widget_unet_training.insert(8, div("Model", False))
-        self.widget_unet_training.insert(15, div("Meta Data", False))
+        self.div_train_data = div("Training Data", False)
+        self.div_model = div("Model", False)
+        self.div_meta_data = div("Meta Data", False)
+        self.widget_unet_training.insert(0, self.div_train_data)
+        self.widget_unet_training.insert(8, self.div_model)
+        self.widget_unet_training.insert(15, self.div_meta_data)
 
         # multi-channel container
         self.widget_unet_training.channels[1].enabled = False
@@ -89,6 +123,60 @@ class Training_Tab:
             self._on_segmentation_change
         )
 
+        # @@@@@ Hide/Show buttons for the collapsible sections @@@@@
+        self.widget_show_train_data = PushButton(label="Show")
+        self.widget_show_train_data.clicked.connect(
+            lambda *args: self.toggle_visibility_train_data(True)
+        )
+        self.widget_unet_training.insert(
+            self.widget_unet_training.index(self.div_train_data) + 1,
+            self.widget_show_train_data,
+        )
+
+        self.widget_show_metadata = PushButton(label="Show")
+        self.widget_show_metadata.clicked.connect(
+            lambda *args: self.toggle_visibility_metadata(True)
+        )
+        self.widget_unet_training.insert(
+            self.widget_unet_training.index(self.div_meta_data) + 1,
+            self.widget_show_metadata,
+        )
+
+        self.train_data_widgets = [
+            self.widget_unet_training.from_disk,
+            self.widget_unet_training.dataset,
+            self.widget_unet_training.image,
+            self.widget_unet_training.segmentation,
+            self.additional_inputs,
+            self.widget_unet_training.channels,
+            self.widget_unet_training.resolution,
+        ]
+        # The Model section is shown together with the training data section
+        # and hidden while the meta data section is expanded.
+        self.model_widgets = [
+            self.div_model,
+            self.widget_unet_training.pretrained,
+            self.widget_unet_training.feature_maps,
+            self.widget_unet_training.patch_size,
+            self.widget_unet_training.max_num_iters,
+            self.widget_unet_training.device,
+        ]
+        self.meta_data_widgets = [
+            self.widget_unet_training.model_name,
+            self.widget_unet_training.description,
+            self.widget_unet_training.modality,
+            self.widget_unet_training.custom_modality,
+            self.widget_unet_training.output_type,
+            self.widget_unet_training.custom_output_type,
+            self.widget_unet_training.authors,
+            self.widget_unet_training.additional_citations,
+            self.widget_unet_training.license,
+            self.widget_unet_training.documentation,
+        ]
+
+        self.widget_show_train_data.hide()
+        self.toggle_visibility_metadata(False)
+
         self.widget_info = Label(value=f"Model dir: {PATH_PANSEG_MODELS}")
         self._automatic_channel_change = False
 
@@ -101,6 +189,50 @@ class Training_Tab:
             ],
             labels=False,
         )
+
+    def toggle_visibility_train_data(self, visible: bool):
+        """Toggles visibility of the training data section"""
+        logger.debug(f"toggle_visibility_train_data called with {visible}")
+        self.train_data_open = visible
+        if visible:
+            self.widget_show_train_data.hide()
+            self.toggle_visibility_metadata(False)
+            for widget in self.model_widgets:
+                widget.show()
+            self.widget_unet_training.from_disk.show()
+            self._on_from_disk_change(self.widget_unet_training.from_disk.value)
+            self.widget_unet_training.channels.show()
+            self.widget_unet_training.resolution.show()
+        else:
+            for widget in self.train_data_widgets:
+                widget.hide()
+            self.widget_show_train_data.show()
+
+    def toggle_visibility_metadata(self, visible: bool):
+        """Toggles visibility of the meta data section"""
+        logger.debug(f"toggle_visibility_metadata called with {visible}")
+        self.meta_data_open = visible
+        if visible:
+            self.widget_show_metadata.hide()
+            self.toggle_visibility_train_data(False)
+            for widget in self.model_widgets:
+                widget.hide()
+            self.widget_unet_training.model_name.show()
+            self.widget_unet_training.description.show()
+            self.widget_unet_training.modality.show()
+            self.widget_unet_training.output_type.show()
+            self._on_custom_output_type_change(
+                self.widget_unet_training.output_type.value
+            )
+            self._on_custom_modality_change(self.widget_unet_training.modality.value)
+            self.widget_unet_training.authors.show()
+            self.widget_unet_training.additional_citations.show()
+            self.widget_unet_training.license.show()
+            self.widget_unet_training.documentation.show()
+        else:
+            for widget in self.meta_data_widgets:
+                widget.hide()
+            self.widget_show_metadata.show()
 
     @magic_factory(
         call_button="Start Training",
@@ -219,6 +351,34 @@ class Training_Tab:
             "value": Undefined,
             "visible": False,
         },
+        authors={
+            "label": "Authors",
+            "widget_type": "TextEdit",
+            "tooltip": "One author per line, either 'Name' or 'Name <email>'.",
+            "visible": False,
+        },
+        additional_citations={
+            "label": "Additional citations",
+            "widget_type": "TextEdit",
+            "tooltip": "One citation per line: '<DOI or URL> [free text]'.\n"
+            "Example: 10.1234/abc.def Smith, J. et al. Some result.\n"
+            f"The PanSeg citation ({PANSEG_CITATION.doi}) is always included.",
+            "visible": False,
+        },
+        license={
+            "label": "License",
+            "widget_type": "ComboBox",
+            "choices": LICENSE_CHOICES,
+            "value": NONE_LICENSE,
+            "visible": False,
+        },
+        documentation={
+            "label": "Documentation",
+            "widget_type": "TextEdit",
+            "tooltip": "Markdown documentation for the model.\n"
+            "Saved as README.md next to the model.",
+            "visible": False,
+        },
         device={
             "label": "Device",
             "widget_type": "RadioButtons",
@@ -249,6 +409,11 @@ class Training_Tab:
         custom_modality: str,
         output_type: Optional[str],
         custom_output_type: str,
+        # fair metadata
+        authors: str,
+        additional_citations: str,
+        license: str,
+        documentation: str,
         pbar: Optional[ProgressBar],
     ) -> None:
         """Train a boundary prediction unet"""
@@ -288,6 +453,13 @@ class Training_Tab:
             return
         if len(model_name) < 5:
             log("Please choose a longer model name!", thread="train_gui")
+            return
+
+        try:
+            parse_authors(authors)
+            parse_citations(additional_citations)
+        except ValueError as e:
+            log(f"Invalid model metadata: {e}", thread="train_gui", level="ERROR")
             return
 
         # Enable geometric progression by setting type to int
@@ -350,6 +522,10 @@ class Training_Tab:
                 "resolution": resolution,
                 "pre_trained": pre_model_path,
                 "layer_order": layer_order,
+                "authors": authors,
+                "additional_citations": additional_citations,
+                "license": None if license == NONE_LICENSE else license,
+                "documentation": documentation,
                 "widgets_to_reset": widgets_to_reset,
                 "_pbar": pbar,
                 "_to_hide": [self.widget_unet_training.call_button],
@@ -358,6 +534,8 @@ class Training_Tab:
 
     def _on_from_disk_change(self, from_disk: str):
         logger.debug(f"_on_from_disk_change called: {from_disk}")
+        if not self.train_data_open:
+            return
         if from_disk == "Disk":
             self.widget_unet_training.image.hide()
             self.widget_unet_training.segmentation.hide()
@@ -474,6 +652,8 @@ class Training_Tab:
         # If the channel change was automatic, do nothing
         if self._automatic_channel_change:
             return
+        if not self.train_data_open:
+            return
         self.additional_inputs.clear()
         if channels[0] <= 1:
             self.additional_inputs.hide()
@@ -495,6 +675,8 @@ class Training_Tab:
 
     def _on_custom_modality_change(self, modality: str):
         logger.debug(f"_on_custom_modality_change called: {modality}")
+        if not self.meta_data_open:
+            return
         if modality == self.CUSTOM:
             self.widget_unet_training.custom_modality.show()
         else:
@@ -502,6 +684,8 @@ class Training_Tab:
 
     def _on_custom_output_type_change(self, output_type: str):
         logger.debug(f"_on_custom_output_type_change called: {output_type}")
+        if not self.meta_data_open:
+            return
         if output_type == self.CUSTOM:
             self.widget_unet_training.custom_output_type.show()
         else:

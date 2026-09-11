@@ -1,7 +1,7 @@
 import logging
 from contextlib import chdir
 from pathlib import Path
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional
 
 import numpy as np
 import torch
@@ -63,9 +63,9 @@ def create_model_config(
         str(pre_trained) if pre_trained else "null"
     )
     train_template["loaders"]["train"]["slice_builder"]["patch_shape"] = patch_size
-    train_template["loaders"]["train"]["slice_builder"]["stride_shape"] = list(
+    train_template["loaders"]["train"]["slice_builder"]["stride_shape"] = [
         i // 2 for i in patch_size
-    )
+    ]
     train_template["loaders"]["val"]["slice_builder"]["patch_shape"] = patch_size
     train_template["loaders"]["val"]["slice_builder"]["stride_shape"] = patch_size
 
@@ -91,6 +91,10 @@ def unet_training(
     resolution: tuple[float, float, float] = (1.0, 1.0, 1.0),
     pre_trained: Optional[Path] = None,
     layer_order: str = "bcr",
+    authors: list[str] | None = None,
+    additional_citations: list[str] | None = None,
+    license: str | None = None,
+    documentation: str | None = None,
 ) -> None:
     """
     Main entrypoint for training a new unet model. Gets called when calling `panseg --train` from cli.
@@ -241,6 +245,10 @@ def unet_training(
             test_in=Path("test_in.npy"),
             test_out=Path("test_out.npy"),
             panseg_config=checkpoint_dir / FILE_CONFIG_TRAIN_YAML,
+            authors=authors,
+            additional_citations=additional_citations,
+            license=license,
+            documentation=documentation,
         )
         model_desc.package(
             checkpoint_dir
@@ -251,7 +259,7 @@ def unet_training(
 def create_datasets(
     dataset_dir: str | Path,
     phase: Literal["train", "val"],
-    patch_shape: Tuple[int, int, int],
+    patch_shape: tuple[int, int, int],
     dimensionality: Literal["2D", "3D"],
 ):
     """

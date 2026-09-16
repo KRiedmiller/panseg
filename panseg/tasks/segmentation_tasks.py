@@ -2,7 +2,6 @@ import logging
 from typing import Optional
 
 from panseg.core.image import ImageLayout, PanSegImage, SemanticType
-from panseg.functionals.dataprocessing.dataprocessing import normalize_01
 from panseg.functionals.segmentation import (
     dt_watershed,
     gasp,
@@ -83,7 +82,7 @@ def dt_watershed_task(
         stacked = False
 
     if is_nuclei_image:
-        boundary_pmaps = normalize_01(image.get_data())
+        boundary_pmaps = image.get_data(normalize_01=True)
         boundary_pmaps = 1.0 - boundary_pmaps
         mask = boundary_pmaps < threshold
     else:
@@ -308,7 +307,7 @@ def aio_watershed_task(
         stacked = False
 
     if is_nuclei_image:
-        boundary_pmaps = normalize_01(image.get_data())
+        boundary_pmaps = image.get_data(normalize_01=True)
         boundary_pmaps = 1.0 - boundary_pmaps
         mask = boundary_pmaps < threshold
     else:

@@ -53,6 +53,21 @@ PROBED_MAX = (256, 256, 256)
         ((16, 8, 8), (10, 10, 10), (4, 4, 4), ((7, 8, 8), (4, 0, 0))),
         ((16, 10, 10), (10, 10, 10), (4, 4, 4), ((2, 2, 2), (4, 4, 4))),
         ((12, 12, 8), (10, 10, 10), (4, 4, 4), ((3, 3, 8), (4, 4, 0))),
+        # Anisotropic volume (issue #146): the sqrt redistribution of the voxel budget
+        # used to push a remaining dimension past the sample size, which then crashed
+        # SliceBuilder. The derived patch must never exceed the sample in any dimension.
+        (
+            (100, 300, 5000),
+            (256, 256, 256),
+            (0, 0, 0),
+            ((100, 300, 409), (0, 0, 0)),
+        ),
+        (
+            (100, 300, 5000),
+            (256, 256, 256),
+            (44, 44, 44),
+            ((100, 212, 321), (0, 44, 44)),
+        ),
     ],
 )
 def test_derive_patch_and_halo_shapes(

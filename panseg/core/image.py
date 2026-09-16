@@ -29,7 +29,6 @@ class SemanticType(Enum):
 
     Attributes:
         RAW (str): Reserved for raw images (e.g. microscopy images)
-        LABEL (str): Reserved for ground truth labels
         PREDICTION (str): Reserved for model prediction
         SEGMENTATION (str): Reserved for segmentation masks
     """

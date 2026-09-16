@@ -83,6 +83,8 @@ def derive_patch_and_halo_shapes(
             assert np.all(shape_patch_max <= shape_volume)
             adjusted_patch_shape = shape_patch_max
 
+        adjusted_patch_shape = np.minimum(adjusted_patch_shape, shape_volume)
+
         patch_size = adjusted_patch_shape - halo_shape * 2
         if np.any(patch_size < 1):
             if np.any(adjusted_patch_shape < 1):

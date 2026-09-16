@@ -77,7 +77,11 @@ class SliceBuilder:
 
     @staticmethod
     def _gen_indices(i, k, s):
-        assert i >= k, "Sample size has to be bigger than the patch size"
+        if i < k:
+            raise ValueError(
+                f"Sample size ({i}) has to be at least as big as the patch size ({k}). "
+                "Reduce the patch size or use a smaller region of interest."
+            )
         for j in range(0, i - k + 1, s):
             yield j
         if j + k < i:

@@ -2,7 +2,6 @@ import logging
 from typing import Optional
 
 from panseg.core.image import ImageLayout, PanSegImage, SemanticType
-from panseg.functionals.dataprocessing.dataprocessing import normalize_01
 from panseg.functionals.segmentation import (
     dt_watershed,
     gasp,

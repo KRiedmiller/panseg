@@ -242,17 +242,18 @@ def unet_prediction(
             )
             patch_halo = (0, 0, 0)
 
-    if patch is None:
-        if input_layout == "YX":
-            raw_shape = (1,) + raw.shape
-        elif input_layout == "ZYX":
-            raw_shape = raw.shape
-        elif input_layout == "CYX":
-            raw_shape = (1,) + raw.shape[1:]
-        elif input_layout == "CZYX":
-            raw_shape = raw.shape[1:]
+    if input_layout == "YX":
+        raw_shape = (1,) + raw.shape
+    elif input_layout == "ZYX":
+        raw_shape = raw.shape
+    elif input_layout == "CYX":
+        raw_shape = (1,) + raw.shape[1:]
+    elif input_layout == "CZYX":
+        raw_shape = raw.shape[1:]
 
-        assert len(raw_shape) == 3
+    assert len(raw_shape) == 3
+
+    if patch is None:
         patch, patch_halo = find_feasible_patch_and_halo_shapes(
             model,
             model_config["in_channels"],
@@ -260,6 +261,18 @@ def unet_prediction(
             patch_halo,
             device,
             both_sides=False,
+        )
+
+    oversized_dims = [
+        f"{dim}: patch {p} > sample {s}"
+        for dim, p, s in zip(("Z", "Y", "X"), patch, raw_shape)
+        if p > s
+    ]
+    if oversized_dims:
+        raise ValueError(
+            f"Patch shape {tuple(patch)} is bigger than the sample shape "
+            f"{tuple(raw_shape)} in: {', '.join(oversized_dims)}. "
+            "Reduce the patch size, or leave it unset to derive a feasible one."
         )
 
     logger.info(

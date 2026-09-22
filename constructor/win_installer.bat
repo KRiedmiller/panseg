@@ -7,5 +7,4 @@ echo ""
 CALL "%PREFIX%\Scripts\activate.bat"
 cd "%PREFIX%"
 tar xf build.gz
-CALL conda install -y -c "%PREFIX%\conda_bld" -c conda-forge panseg
-CALL pip install zmesh
+CALL conda install -y "%PREFIX%\conda_bld::panseg" -c conda-forge

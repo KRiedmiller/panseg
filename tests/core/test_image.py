@@ -43,7 +43,63 @@ def test_image_layout_enum():
     assert ImageLayout.ZYX.value == "ZYX"
     assert ImageLayout.CZYX.value == "CZYX"
     assert ImageLayout.ZCYX.value == "ZCYX"
-    assert ImageLayout.to_choices() == ["YX", "CYX", "ZYX", "CZYX", "ZCYX"]
+    assert ImageLayout.TYX.value == "TYX"
+    assert ImageLayout.TCYX.value == "TCYX"
+    assert ImageLayout.TZYX.value == "TZYX"
+    assert ImageLayout.TCZYX.value == "TCZYX"
+    assert ImageLayout.to_choices() == [
+        "YX",
+        "CYX",
+        "ZYX",
+        "CZYX",
+        "ZCYX",
+        "TYX",
+        "TCYX",
+        "TZYX",
+        "TCZYX",
+    ]
+
+
+# Derived layout properties across all nine layouts: the layout string alone
+# carries every axis, nothing about the axes is stored.
+LAYOUT_DERIVED_PROPS = [
+    pytest.param(ImageLayout.YX, None, None, ImageDimensionality.TWO, False, id="YX"),
+    pytest.param(ImageLayout.CYX, 0, None, ImageDimensionality.TWO, False, id="CYX"),
+    pytest.param(
+        ImageLayout.ZYX, None, None, ImageDimensionality.THREE, False, id="ZYX"
+    ),
+    pytest.param(
+        ImageLayout.CZYX, 0, None, ImageDimensionality.THREE, False, id="CZYX"
+    ),
+    pytest.param(
+        ImageLayout.ZCYX, 1, None, ImageDimensionality.THREE, False, id="ZCYX"
+    ),
+    pytest.param(ImageLayout.TYX, None, 0, ImageDimensionality.TWO, True, id="TYX"),
+    pytest.param(ImageLayout.TCYX, 1, 0, ImageDimensionality.TWO, True, id="TCYX"),
+    pytest.param(ImageLayout.TZYX, None, 0, ImageDimensionality.THREE, True, id="TZYX"),
+    pytest.param(ImageLayout.TCZYX, 1, 0, ImageDimensionality.THREE, True, id="TCZYX"),
+]
+
+
+@pytest.mark.parametrize(
+    ("layout", "channel_axis", "time_axis", "dimensionality", "is_timelapse"),
+    LAYOUT_DERIVED_PROPS,
+)
+def test_image_properties_derived_layout_props(
+    layout, channel_axis, time_axis, dimensionality, is_timelapse
+):
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=layout,
+        original_voxel_size=voxel_size,
+    )
+    assert props.channel_axis == channel_axis
+    assert props.time_axis == time_axis
+    assert props.dimensionality == dimensionality
+    assert props.is_timelapse is is_timelapse
 
 
 # Tests for ImageProperties class
@@ -107,6 +163,68 @@ def test_image_properties_image_type():
     assert label_image_props.image_type == ImageType.LABEL
 
 
+def test_image_properties_t_spacing_default_unknown():
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+    )
+    assert props.t_spacing is None
+    assert props.t_unit == "s"
+    assert props.t == 1.0
+
+
+def test_image_properties_t_spacing_seconds():
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=2.0,
+    )
+    assert props.t_spacing == 2.0
+    assert props.t_unit == "s"
+    assert props.t == 2.0
+
+
+def test_image_properties_t_spacing_unit_normalization():
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    kwargs = dict(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TYX,
+        original_voxel_size=voxel_size,
+    )
+    ms_props = ImageProperties(t_spacing=500.0, t_unit="ms", **kwargs)
+    assert ms_props.t_spacing == 0.5
+    assert ms_props.t_unit == "s"
+
+    min_props = ImageProperties(t_spacing=2.0, t_unit="min", **kwargs)
+    assert min_props.t_spacing == 120.0
+    assert min_props.t_unit == "s"
+
+
+def test_image_properties_t_spacing_invalid():
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    kwargs = dict(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TYX,
+        original_voxel_size=voxel_size,
+    )
+    with pytest.raises(ValueError):
+        ImageProperties(t_spacing=0.0, **kwargs)
+    with pytest.raises(ValueError):
+        ImageProperties(t_spacing=5.0, t_unit="h", **kwargs)
+
+
 def test_image_properties_channel_axis():
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
 
@@ -149,6 +267,99 @@ def test_image_properties_interpolation_order():
         original_voxel_size=voxel_size,
     )
     assert raw_image_props.interpolation_order() == 1
+
+
+# Singleton squeeze rule: drop every length-1 axis except Y and X, the
+# layout is the projection onto what remains.
+SQUEEZE_CASES = [
+    pytest.param(
+        ImageLayout.TZYX,
+        (1, 5, 16, 16),
+        ImageLayout.ZYX,
+        (5, 16, 16),
+        id="T=1 TZYX->ZYX",
+    ),
+    pytest.param(
+        ImageLayout.TCZYX,
+        (7, 3, 1, 16, 16),
+        ImageLayout.TCYX,
+        (7, 3, 16, 16),
+        id="Z=1 TCZYX->TCYX",
+    ),
+    pytest.param(
+        ImageLayout.TCZYX,
+        (1, 3, 5, 16, 16),
+        ImageLayout.CZYX,
+        (3, 5, 16, 16),
+        id="T=1 TCZYX->CZYX",
+    ),
+    pytest.param(
+        ImageLayout.TCZYX,
+        (7, 1, 5, 16, 16),
+        ImageLayout.TZYX,
+        (7, 5, 16, 16),
+        id="C=1 TCZYX->TZYX",
+    ),
+    pytest.param(
+        ImageLayout.ZYX, (1, 16, 16), ImageLayout.YX, (16, 16), id="Z=1 ZYX->YX"
+    ),
+    pytest.param(
+        ImageLayout.CZYX,
+        (1, 1, 16, 16),
+        ImageLayout.YX,
+        (16, 16),
+        id="C=1,Z=1 CZYX->YX",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "layout, shape, expected_layout, expected_shape", SQUEEZE_CASES
+)
+def test_construction_squeeze_rule(layout, shape, expected_layout, expected_shape):
+    data = np.random.rand(*shape)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=layout,
+        original_voxel_size=voxel_size,
+    )
+    image = PanSegImage(data, props)
+    assert image.image_layout == expected_layout
+    assert image.shape == expected_shape
+
+
+def test_construction_squeeze_dropping_t_clears_t_spacing():
+    data = np.random.rand(1, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=5.0,
+    )
+    image = PanSegImage(data, props)
+    assert image.image_layout == ImageLayout.ZYX
+    assert image.is_timelapse is False
+    assert image.properties.t_spacing is None
+
+
+def test_construction_squeeze_data_content():
+    data = np.random.rand(1, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+    )
+    image = PanSegImage(data, props)
+    np.testing.assert_array_equal(image.get_data(normalize_01=False), data[0])
 
 
 # Tests for PanSegImage class
@@ -265,6 +476,50 @@ def test_panseg_image_scale_property():
     )
     ps_image = PanSegImage(data, image_props)
     assert ps_image.scale == (0.5, 1.0, 1.0)
+
+
+def test_scale_tzyx_known_t_spacing():
+    data = np.random.rand(7, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 2.0), unit="um")
+    image_props = ImageProperties(
+        name="timelapse",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=0.5,
+    )
+    ps_image = PanSegImage(data, image_props)
+    assert ps_image.scale == (0.5, 0.5, 1.0, 2.0)
+
+
+def test_scale_tzyx_unknown_t_spacing():
+    data = np.random.rand(7, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 2.0), unit="um")
+    image_props = ImageProperties(
+        name="timelapse",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+    )
+    ps_image = PanSegImage(data, image_props)
+    assert ps_image.scale == (1.0, 0.5, 1.0, 2.0)
+
+
+def test_scale_tcyx():
+    data = np.random.rand(7, 3, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 2.0), unit="um")
+    image_props = ImageProperties(
+        name="timelapse",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TCYX,
+        original_voxel_size=voxel_size,
+        t_spacing=2.0,
+    )
+    ps_image = PanSegImage(data, image_props)
+    assert ps_image.scale == (2.0, 1.0, 1.0, 2.0)
 
 
 def test_requires_scaling():
@@ -495,6 +750,75 @@ def test_split_image_CYX():
     assert all([s.shape == (10, 11) for s in splits])
 
 
+def test_split_image_TCZYX():
+    data = np.random.rand(7, 3, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TCZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=0.5,
+    )
+    ps_image = PanSegImage(data, image_props)
+    splits = ps_image.split_channels()
+
+    assert len(splits) == 3
+    assert [s.name for s in splits] == ["image_0", "image_1", "image_2"]
+    assert all([s.image_layout == ImageLayout.TZYX for s in splits])
+    assert all([s.is_timelapse for s in splits])
+    assert all([s.shape == (7, 5, 16, 16) for s in splits])
+    assert all([s.properties.t_spacing == 0.5 for s in splits])
+
+
+def test_split_image_TCYX():
+    data = np.random.rand(7, 4, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TCYX,
+        original_voxel_size=voxel_size,
+        t_spacing=0.5,
+    )
+    ps_image = PanSegImage(data, image_props)
+    splits = ps_image.split_channels()
+
+    assert len(splits) == 4
+    assert [s.name for s in splits] == ["image_0", "image_1", "image_2", "image_3"]
+    assert all([s.image_layout == ImageLayout.TYX for s in splits])
+    assert all([s.is_timelapse for s in splits])
+    assert all([s.shape == (7, 16, 16) for s in splits])
+    assert all([s.properties.t_spacing == 0.5 for s in splits])
+
+
+def test_split_image_TZYX_not_split():
+    data = np.random.rand(7, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+    )
+    ps_image = PanSegImage(data, image_props)
+    assert ps_image.split_channels() == [ps_image]
+
+    data = np.random.rand(7, 16, 16)
+    image_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TYX,
+        original_voxel_size=voxel_size,
+    )
+    ps_image = PanSegImage(data, image_props)
+    assert ps_image.split_channels() == [ps_image]
+
+
 def test_merge_images_2d():
     data = np.random.rand(10, 11)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
@@ -576,6 +900,148 @@ def test_merge_images_3dc():
     assert merged.shape == (5, 9, 10, 11)
 
 
+def test_merge_timelapse_matching_t_spacing():
+    data = np.random.rand(7, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=10.0,
+    )
+    ps_image_1 = PanSegImage(data, image_props)
+    ps_image_2 = PanSegImage(data, image_props)
+
+    merged = ps_image_1.merge_with(ps_image_2)
+    assert merged.image_layout == ImageLayout.TCZYX
+    assert merged.is_timelapse
+    # The channel axis sits at index 1, after T.
+    assert merged.shape == (7, 2, 5, 16, 16)
+    assert merged.properties.t_spacing == 10.0
+    splits = merged.split_channels()
+    assert len(splits) == 2
+    assert all([s.image_layout == ImageLayout.TZYX for s in splits])
+    assert all([s.shape == (7, 5, 16, 16) for s in splits])
+
+
+def test_merge_timelapse_2d():
+    data = np.random.rand(7, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TYX,
+        original_voxel_size=voxel_size,
+        t_spacing=5.0,
+    )
+    ps_image_1 = PanSegImage(data, image_props)
+    ps_image_2 = PanSegImage(data, image_props)
+
+    merged = ps_image_1.merge_with(ps_image_2)
+    assert merged.image_layout == ImageLayout.TCYX
+    assert merged.is_timelapse
+    assert merged.shape == (7, 2, 16, 16)
+    assert merged.properties.t_spacing == 5.0
+
+
+def test_merge_timelapse_mismatched_t_spacing():
+    data = np.random.rand(7, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props_1 = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=10.0,
+    )
+    image_props_2 = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=20.0,
+    )
+    ps_image_1 = PanSegImage(data, image_props_1)
+    ps_image_2 = PanSegImage(data, image_props_2)
+
+    with pytest.raises(ValueError):
+        ps_image_1.merge_with(ps_image_2)
+
+
+def test_merge_timelapse_set_vs_unknown_t_spacing():
+    data = np.random.rand(7, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props_known = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=10.0,
+    )
+    image_props_unknown = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+    )
+    ps_image_1 = PanSegImage(data, image_props_known)
+    ps_image_2 = PanSegImage(data, image_props_unknown)
+
+    with pytest.raises(ValueError):
+        ps_image_1.merge_with(ps_image_2)
+
+
+def test_merge_timelapse_both_unknown_t_spacing():
+    data = np.random.rand(7, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+    )
+    ps_image_1 = PanSegImage(data, image_props)
+    ps_image_2 = PanSegImage(data, image_props)
+
+    merged = ps_image_1.merge_with(ps_image_2)
+    assert merged.image_layout == ImageLayout.TCZYX
+    assert merged.shape == (7, 2, 5, 16, 16)
+    assert merged.properties.t_spacing is None
+
+
+def test_merge_timelapse_vs_still():
+    data_3d = np.random.rand(7, 5, 16, 16)
+    data_still = np.random.rand(5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    timelapse_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TZYX,
+        original_voxel_size=voxel_size,
+    )
+    still_props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.ZYX,
+        original_voxel_size=voxel_size,
+    )
+    ps_timelapse = PanSegImage(data_3d, timelapse_props)
+    ps_still = PanSegImage(data_still, still_props)
+
+    with pytest.raises(ValueError):
+        ps_timelapse.merge_with(ps_still)
+
+
 def test_merge_images_wrong_semantic():
     data = np.random.rand(9, 10, 11)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
@@ -624,6 +1090,59 @@ def test_merge_images_2d_3d():
 
     with pytest.raises(ValueError):
         ps_image_1.merge_with(ps_image_2)
+
+
+def test_image_properties_json_roundtrip():
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    props = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TCZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=0.5,
+    )
+    json_str = props.model_dump_json()
+    loaded = ImageProperties.model_validate_json(json_str)
+    assert loaded.image_layout == ImageLayout.TCZYX
+    assert loaded.t_spacing == 0.5
+    assert loaded.t_unit == "s"
+
+
+def test_image_properties_json_old_format():
+    old_json = (
+        '{"name": "image", "semantic_type": "raw",'
+        ' "voxel_size": {"voxels_size": [1.0, 1.0, 1.0], "unit": "um"},'
+        ' "image_layout": "ZYX",'
+        ' "original_voxel_size": {"voxels_size": [1.0, 1.0, 1.0], "unit": "um"},'
+        ' "source_file_name": null}'
+    )
+    loaded = ImageProperties.model_validate_json(old_json)
+    assert loaded.image_layout == ImageLayout.ZYX
+    assert loaded.t_spacing is None
+    assert loaded.t_unit == "s"
+
+
+def test_napari_layer_roundtrip_timelapse():
+    data = np.random.rand(7, 3, 5, 16, 16)
+    voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 2.0), unit="um")
+    image_props = ImageProperties(
+        name="timelapse",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TCZYX,
+        original_voxel_size=voxel_size,
+        t_spacing=2.0,
+    )
+    ps_image = PanSegImage(data, image_props)
+
+    layer_tuple = ps_image.to_napari_layer_tuple()
+    layer = Image(layer_tuple[0], **layer_tuple[1])
+    loaded = PanSegImage.from_napari_layer(layer)
+
+    assert loaded.image_layout == ImageLayout.TCZYX
+    assert loaded.properties.t_spacing == 2.0
+    assert loaded.scale == (2.0, 1.0, 0.5, 1.0, 2.0)
 
 
 def test_stack_sort_noop():
@@ -727,6 +1246,54 @@ def test_stack_sort_3dc_invCX():
     assert n_data.shape == (2, 3, 5, 4)
     assert n_voxel_size.voxels_size == (3, 5, 4)
     assert np.all(n_data[::-1, :, ::-1, :] == np.transpose(data, axes=[0, 1, 3, 2]))
+
+
+def test_stack_sort_4d_noop():
+    stack_layout = "TZYX"
+    data = np.arange(120).reshape((2, 3, 4, 5))
+    voxel_size = VoxelSize(voxels_size=(3, 4, 5))
+
+    n_stack_layout, n_data, n_voxel_size = stack_sort(stack_layout, data, voxel_size)
+    assert n_stack_layout == "TZYX"
+    assert n_data.shape == (2, 3, 4, 5)
+    assert n_voxel_size.voxels_size == (3, 4, 5)
+    assert np.all(n_data == data)
+
+
+def test_stack_sort_5dc_noop():
+    stack_layout = "TCZYX"
+    data = np.arange(720).reshape((2, 3, 4, 5, 6))
+    voxel_size = VoxelSize(voxels_size=(4, 5, 6))
+
+    n_stack_layout, n_data, n_voxel_size = stack_sort(stack_layout, data, voxel_size)
+    assert n_stack_layout == "TCZYX"
+    assert n_data.shape == (2, 3, 4, 5, 6)
+    assert n_voxel_size.voxels_size == (4, 5, 6)
+    assert np.all(n_data == data)
+
+
+def test_stack_sort_4dc_reorder():
+    stack_layout = "ZTCYX"
+    data = np.arange(720).reshape((3, 2, 4, 5, 6))
+    voxel_size = VoxelSize(voxels_size=(3, 5, 6))
+
+    n_stack_layout, n_data, n_voxel_size = stack_sort(stack_layout, data, voxel_size)
+    assert n_stack_layout == "TCZYX"
+    assert n_data.shape == (2, 4, 3, 5, 6)
+    assert n_voxel_size.voxels_size == (3, 5, 6)
+    assert np.all(n_data == np.transpose(data, axes=[1, 2, 0, 3, 4]))
+
+
+def test_stack_sort_4d_invT():
+    stack_layout = "-TZYX"
+    data = np.arange(120).reshape((2, 3, 4, 5))
+    voxel_size = VoxelSize(voxels_size=(3, 4, 5))
+
+    n_stack_layout, n_data, n_voxel_size = stack_sort(stack_layout, data, voxel_size)
+    assert n_stack_layout == "TZYX"
+    assert n_data.shape == (2, 3, 4, 5)
+    assert n_voxel_size.voxels_size == (3, 4, 5)
+    assert np.all(n_data[::-1, :, :, :] == data)
 
 
 def test_stack_sort_2dc_invX():

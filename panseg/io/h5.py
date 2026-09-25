@@ -150,7 +150,9 @@ def read_h5_voxel_size(
     return voxel_size
 
 
-def read_h5_time_spacing(path: Path, key: Optional[str] = None) -> tuple:
+def read_h5_time_spacing(
+    path: Path, key: Optional[str] = None
+) -> tuple[Optional[float], str]:
     """
     Read the time spacing attrs of a dataset written by PanSeg.
 

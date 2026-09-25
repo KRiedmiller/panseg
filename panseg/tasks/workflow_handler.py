@@ -575,6 +575,7 @@ def _restack_timepoint_outputs(results: list, timelapse_inputs: dict):
                 # outputs: preserved from the input, or overridden by a
                 # property task like set_t_spacing_task
                 t_spacing=outputs[0].properties.t_spacing,
+                t_unit=outputs[0].properties.t_unit,
                 name=_restacked_name(outputs[0].name, timelapse_inputs),
             )
         )
@@ -645,7 +646,8 @@ def timepoint_map(
                 return func(*args, **kwargs)
 
             t_lengths = {
-                name: _timepoint_count(image) for name, image in timelapse_inputs.items()
+                name: _timepoint_count(image)
+                for name, image in timelapse_inputs.items()
             }
             if len(set(t_lengths.values())) > 1:
                 raise ValueError(

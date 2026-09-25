@@ -398,8 +398,9 @@ class PanSegImage:
         with the T axis dropped from the layout (TZYX->ZYX, TYX->YX,
         TCZYX->CZYX, TCYX->CYX), the time slice as data and the name
         f"{name}_t{i}" (the channel naming convention). A timepoint is not a
-        timelapse: t_spacing/t_unit are None on it, so the caller restacks
-        with restack_timepoints to stamp the parent spacing back on.
+        timelapse: it carries no time spacing (t_spacing None, t_unit the
+        canonical "s"), so the caller restacks with restack_timepoints to
+        stamp the parent spacing back on.
 
         A still image returns itself as the only timepoint.
         """

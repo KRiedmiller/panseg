@@ -2,8 +2,8 @@
 
 import itertools
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 from uuid import uuid4
 from xml.etree import ElementTree
 
@@ -369,6 +369,70 @@ def _timelapse_segmentation() -> np.ndarray:
 def timelapse_segmentation() -> np.ndarray:
     """uint16 TZYX segmentation timelapse; label IDs are independent across timepoints."""
     return _timelapse_segmentation()
+
+
+def _timelapse_labels_data() -> np.ndarray:
+    """Deterministic uint16 TZYX labels, shape (3, 4, 10, 10).
+
+    Label IDs are disjoint per timepoint and the positions are fixed, so
+    handler/widget assertions can be exact: t=0 carries {1, 2}, t=1 {3, 4},
+    t=2 {5}.
+    """
+    seg = np.zeros((3, 4, 10, 10), dtype="uint16")
+    seg[0, 0:2, 0:2, 0:2] = 1
+    seg[0, 0:2, 5:7, 5:7] = 2
+    seg[1, 0:2, 0:2, 0:2] = 3
+    seg[1, 2:4, 5:7, 5:7] = 4
+    seg[2, 0:2, 0:2, 0:2] = 5
+    return seg
+
+
+def _timelapse_labels_layer(data: np.ndarray, name: str, image_layout: str) -> Labels:
+    voxel_size = (1.0, 1.0, 1.0)
+    metadata = {
+        "semantic_type": SemanticType.SEGMENTATION,
+        "voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "original_voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "image_layout": image_layout,
+        "t_spacing": 10.0,
+        "t_unit": "s",
+        "id": uuid4(),
+    }
+    return Labels(data, metadata=metadata, name=name)
+
+
+@pytest.fixture
+def napari_timelapse_segmentation() -> Labels:
+    """Labels napari layer, TZYX layout, deterministic per-timepoint label IDs."""
+    return _timelapse_labels_layer(
+        _timelapse_labels_data(), "test_segmentation_timelapse", "TZYX"
+    )
+
+
+@pytest.fixture
+def napari_timelapse_segmentation_2d() -> Labels:
+    """Labels napari layer, TYX layout, deterministic per-timepoint label IDs."""
+    data = _timelapse_labels_data().max(axis=1)
+    data[1, 5:7, 0:2] = 4
+    data[2, 5:7, 5:7] = 6
+    return _timelapse_labels_layer(data, "test_segmentation_timelapse_2d", "TYX")
+
+
+@pytest.fixture
+def napari_timelapse_prediction() -> Image:
+    """PREDICTION napari layer, TZYX layout, matching the deterministic timelapse labels shape."""
+    data = np.random.default_rng(16).random((3, 4, 10, 10)).astype("float32")
+    voxel_size = (1.0, 1.0, 1.0)
+    metadata = {
+        "semantic_type": SemanticType.PREDICTION,
+        "voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "original_voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "image_layout": "TZYX",
+        "t_spacing": 10.0,
+        "t_unit": "s",
+        "id": uuid4(),
+    }
+    return Image(data, metadata=metadata, name="test_prediction_timelapse")
 
 
 # --- Synthetic OME-TIFF builders (time-dimension spec) ---

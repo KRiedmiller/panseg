@@ -19,12 +19,13 @@ from panseg.functionals.dataprocessing import (
     set_biggest_instance_to_zero,
 )
 from panseg.io.voxelsize import VoxelSize
-from panseg.tasks import task_tracker
+from panseg.tasks import task_tracker, timepoint_map
 
 logger = logging.getLogger(__name__)
 
 
 @task_tracker
+@timepoint_map
 def gaussian_smoothing_task(image: PanSegImage, sigma: float) -> PanSegImage:
     """
     Apply Gaussian smoothing to a PanSegImage object.
@@ -89,6 +90,7 @@ def _cropping(data, crop_slices):
 
 
 @task_tracker
+@timepoint_map
 def image_cropping_task(
     image: PanSegImage, rectangle=None, crop_z: tuple[int, int] = (0, 100)
 ) -> PanSegImage:
@@ -121,10 +123,13 @@ def image_cropping_task(
 
 
 @task_tracker
+@timepoint_map
 def set_voxel_size_task(
     image: PanSegImage, voxel_size: tuple[float, float, float]
 ) -> PanSegImage:
     """Set the voxel size of an image.
+
+    Property-only: the data is unchanged.
 
     Args:
         image (PanSegImage): input image
@@ -142,6 +147,31 @@ def set_voxel_size_task(
 
 
 @task_tracker
+@timepoint_map
+def set_t_spacing_task(image: PanSegImage, t_spacing: float | None) -> PanSegImage:
+    """Set the time spacing of a timelapse image.
+
+    Property-only: the data is unchanged. Mirrors set_voxel_size_task, but
+    for the time axis.
+
+    Args:
+        image (PanSegImage): input image
+        t_spacing (float | None): new time spacing in seconds, or None to
+            mark it unknown
+
+    Returns:
+        PanSegImage: new image with the new time spacing
+    """
+    new_image = image.derive_new(
+        image._data,
+        name=f"{image.name}_set_t_spacing",
+        t_spacing=t_spacing,
+    )
+    return new_image
+
+
+@task_tracker
+@timepoint_map
 def image_rescale_to_shape_task(
     image: PanSegImage, new_shape: tuple[int, ...], order: int = 0
 ) -> PanSegImage:
@@ -204,6 +234,7 @@ def image_rescale_to_shape_task(
 
 
 @task_tracker
+@timepoint_map
 def image_rescale_to_voxel_size_task(
     image: PanSegImage,
     new_voxels_size: tuple[float, float, float],
@@ -245,10 +276,15 @@ def image_rescale_to_voxel_size_task(
 
 
 @task_tracker
+@timepoint_map(broadcast=True)
 def remove_false_positives_by_foreground_probability_task(
     segmentation: PanSegImage, foreground: PanSegImage, threshold: float
 ) -> list[PanSegImage]:
     """Remove false positives from a segmentation based on the foreground probability.
+
+    On timelapse input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints. The foreground
+    probability may be a still image, applied to every timepoint.
 
     Args:
         segmentation (PanSegImage): input segmentation
@@ -276,6 +312,7 @@ def remove_false_positives_by_foreground_probability_task(
 
 
 @task_tracker
+@timepoint_map
 def fix_over_under_segmentation_from_nuclei_task(
     cell_seg: PanSegImage,
     nuclei_seg: PanSegImage,
@@ -287,6 +324,9 @@ def fix_over_under_segmentation_from_nuclei_task(
 ) -> PanSegImage:
     """
     Task to fix over- and under-segmentation of cells based on nuclear segmentation.
+
+    On timelapse input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
 
     Args:
         cell_seg (PanSegImage): Input cell segmentation as a PanSegImage object.
@@ -313,11 +353,16 @@ def fix_over_under_segmentation_from_nuclei_task(
 
 
 @task_tracker
+@timepoint_map
 def set_biggest_instance_to_zero_task(
     image: PanSegImage, instance_could_be_zero: bool = False
 ) -> PanSegImage:
     """
     Task to set the largest segment in a segmentation image to zero.
+
+    On timelapse input the task runs per timepoint: the largest instance is
+    zeroed within each timepoint, and label IDs are independent across
+    timepoints.
 
     Args:
         image (PanSegImage): Segmentation image to process.
@@ -341,12 +386,17 @@ def set_biggest_instance_to_zero_task(
 
 
 @task_tracker
+@timepoint_map
 def relabel_segmentation_task(
     image: PanSegImage, background: int | None = None
 ) -> PanSegImage:
     """
     Task to relabel a segmentation image contiguously, ensuring non-touching
     segments with the same ID are relabeled.
+
+    On timelapse input the task runs per timepoint: connected components are
+    renumbered per timepoint (spatial connectivity only), and label IDs are
+    independent across timepoints.
 
     Args:
         image (PanSegImage): Segmentation image to process.
@@ -363,6 +413,7 @@ def relabel_segmentation_task(
 
 
 @task_tracker
+@timepoint_map(broadcast=True)
 def image_pair_operation_task(
     image1: PanSegImage,
     image2: PanSegImage,

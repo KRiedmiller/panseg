@@ -8,6 +8,7 @@ from panseg.tasks.workflow_handler import RunTimeInputSchema, Task_message
 
 @task_tracker(
     is_root=True,
+    stack_level=True,
     list_inputs={
         "input_path": RunTimeInputSchema(
             description="Path to a file, or a directory containing files (all files will be imported) or list of paths.",
@@ -53,6 +54,7 @@ def import_image_task(
 
 @task_tracker(
     is_leaf=True,
+    stack_level=True,
     list_inputs={
         "export_directory": RunTimeInputSchema(
             description="Output directory path where the image will be saved",
@@ -105,7 +107,7 @@ def export_image_task(
     return None
 
 
-@task_tracker
+@task_tracker(stack_level=True)
 def merge_channels_task(**kwargs) -> PanSegImage:
     """Merge an arbitrary number of PanSegImages
 

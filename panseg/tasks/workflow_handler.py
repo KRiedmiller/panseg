@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 from rich.traceback import Traceback
 
 from panseg.__version__ import __version__
-from panseg.core.image import PanSegImage
+from panseg.core.image import PanSegImage, restack_timepoints
 
 
 class NodeType(str, Enum):
@@ -329,16 +329,47 @@ class WorkflowHandler:
 workflow_handler = WorkflowHandler()
 
 
+def _reject_timelapse_inputs(kwargs: dict, func_name: str) -> None:
+    """Reject timelapse inputs to a task without explicit timelapse support."""
+    for name, arg in kwargs.items():
+        if isinstance(arg, PanSegImage) and arg.is_timelapse:
+            raise ValueError(
+                f"Task {func_name} received the timelapse image {name!r} but is "
+                "neither frame-mapped (@timepoint_map) nor stack-level "
+                "(task_tracker(stack_level=True)); timelapse support must be "
+                "explicit per task."
+            )
+
+
+def _timelapse_guard(func: Callable) -> Callable:
+    """Wrap a task so the registered callable rejects timelapse inputs too.
+
+    The task_tracker wrapper guards the GUI path; the headless SerialRunner
+    calls the registered callable, which is this guard.
+    """
+
+    @wraps(func)
+    def guard(*args, **kwargs):
+        _reject_timelapse_inputs(kwargs, func.__name__)
+        return func(*args, **kwargs)
+
+    return guard
+
+
 def task_tracker(
     func: Callable | None = None,
     *,
     is_root=False,
     is_leaf=False,
     list_inputs: dict[str, RunTimeInputSchema] | None = None,
+    stack_level: bool = False,
 ):
     """
     Decorator to register a function as a task in the workflow.
     To not set a parameter in headless mode its name must start with _
+
+    Every task is explicitly frame-mapped or stack-level: a task that is
+    neither rejects timelapse inputs on both execution paths.
 
     Args:
         func (Callable): The function that will be registered as a task.
@@ -348,6 +379,9 @@ def task_tracker(
             (usually a writer task).
         list_inputs (dict[str, TaskUserInput]): A dictionary of the inputs of
             the function. The key is the name of the parameter
+        stack_level (bool): If True, the task is classified stack-level: it
+            operates on the whole timelapse as one object and accepts
+            timelapse images (e.g. export_image_task). Defaults to False.
     """
 
     if is_root and is_leaf:
@@ -363,13 +397,20 @@ def task_tracker(
     list_inputs = list_inputs or {}
 
     def _inner_decorator(func):
-        workflow_handler.register_func(func)
+        frame_mapped = getattr(func, "__timepoint_mapped__", False)
+        if frame_mapped or stack_level:
+            workflow_handler.register_func(func)
+        else:
+            # the guard makes the headless path reject timelapse inputs too
+            workflow_handler.register_func(_timelapse_guard(func))
 
         @wraps(func)
         def wrapper(*args, **kwargs):
             assert len(args) == 0, (
                 "Workflow functions should not have positional arguments"
             )
+            if not frame_mapped and not stack_level:
+                _reject_timelapse_inputs(kwargs, func.__name__)
             func_signature = signature(func)
             parameters = {
                 param: func_signature.parameters[param].default
@@ -454,6 +495,221 @@ def task_tracker(
             return out_image
 
         wrapper.__panseg_task__ = func.__name__
+        return wrapper
+
+    if func is None:
+        return _inner_decorator
+
+    return _inner_decorator(func)
+
+
+def _timepoint_count(image: PanSegImage) -> int:
+    """Number of timepoints of a timelapse image."""
+    t_axis = image.time_axis
+    assert t_axis is not None, "No time axis known!"
+    return image.shape[t_axis]
+
+
+def _restacked_name(output_name: str, timelapse_inputs: dict) -> str:
+    """Strip the timepoint markers from a first-timepoint output name.
+
+    Task bodies name their outputs from their input names (f"{name}_..."),
+    and the input at timepoint 0 is named f"{parent.name}_t0": replacing
+    each marker with the parent name yields the name the task gives a still
+    image. Longer parent names are replaced first so a name that is a
+    prefix of another cannot eat its marker.
+    """
+    name = output_name
+    for parent_name in sorted(
+        (image.name for image in timelapse_inputs.values()), key=len, reverse=True
+    ):
+        name = name.replace(f"{parent_name}_t0", parent_name)
+    return name
+
+
+def _restack_timepoint_outputs(results: list, timelapse_inputs: dict):
+    """Restack the per-timepoint outputs of a frame-mapped task.
+
+    Every timepoint must return the same structure: one PanSegImage, a
+    list/tuple of PanSegImages (restacked element-wise, e.g. both outputs
+    of remove_false_positives_by_foreground_probability_task), or None.
+    """
+    outputs_per_timepoint = []
+    for result in results:
+        if isinstance(result, PanSegImage):
+            outputs_per_timepoint.append([result])
+        elif isinstance(result, (list, tuple)):
+            if not all(isinstance(image, PanSegImage) for image in result):
+                raise ValueError(
+                    "A frame-mapped task must return images, got "
+                    + ", ".join(str(type(image)) for image in result)
+                )
+            outputs_per_timepoint.append(list(result))
+        elif result is None:
+            outputs_per_timepoint.append(None)
+        else:
+            raise ValueError(
+                f"A frame-mapped task must return images, got {type(result)}"
+            )
+
+    if all(result is None for result in outputs_per_timepoint):
+        return None
+    if any(result is None for result in outputs_per_timepoint):
+        raise ValueError("A frame-mapped task returned None only for some timepoints")
+
+    n_outputs = {len(result) for result in outputs_per_timepoint}
+    if len(n_outputs) > 1:
+        raise ValueError(
+            "A frame-mapped task returned a different number of outputs per timepoint: "
+            f"{sorted(n_outputs)}"
+        )
+    n_outputs = n_outputs.pop()
+
+    restacked = []
+    for j in range(n_outputs):
+        outputs = [result[j] for result in outputs_per_timepoint]
+        restacked.append(
+            restack_timepoints(
+                outputs,
+                # the task bodies left the effective spacing on their
+                # outputs: preserved from the input, or overridden by a
+                # property task like set_t_spacing_task
+                t_spacing=outputs[0].properties.t_spacing,
+                name=_restacked_name(outputs[0].name, timelapse_inputs),
+            )
+        )
+    if n_outputs == 1:
+        return restacked[0]
+    return restacked
+
+
+def timepoint_map(
+    func: Callable | None = None,
+    *,
+    broadcast: bool = False,
+):
+    """
+    Decorator that runs a task frame-by-frame over timelapse input.
+
+    Stack it directly under @task_tracker; the task body stays unchanged
+    and never sees T. At call time the decorator inspects the keyword
+    arguments: every PanSegImage input with is_timelapse is split into
+    timepoints, the task body runs once per timepoint, and the outputs are
+    restacked into a timelapse. A call without a timelapse input passes
+    through untouched.
+
+    The loop sits under the recording layer on both execution paths: the
+    GUI runs the @task_tracker wrapper, the headless SerialRunner calls
+    the registered callable, which is this wrapper.
+
+    Rules:
+
+    - All timelapse inputs must have the same number of timepoints and the
+      same t_spacing (both unknown is fine); a mismatch raises ValueError.
+    - A still image next to timelapse inputs raises ValueError unless the
+      task opts in with broadcast=True: the still image is then applied to
+      every timepoint (e.g. a static background).
+    - The first failed timepoint aborts the run and its exception
+      propagates; a Task_message returned by an inner call counts as a
+      failure and propagates too.
+    - A _tracker kwarg is driven at timepoint granularity (total = number
+      of timepoints, one tick per completed timepoint); the per-timepoint
+      calls see _tracker=None.
+    - Timepoints are locals of the wrapper: they never enter var_space or
+      the DAG node, which records the timelapse in and the restacked
+      timelapse out with the same parameters as a still-image call.
+
+    Args:
+        func (Callable): The task function wrapped by this decorator.
+        broadcast (bool): Opt in to applying still-image inputs to every
+            timepoint instead of rejecting mixed inputs.
+    """
+
+    def _inner_decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            assert len(args) == 0, (
+                "Workflow functions should not have positional arguments"
+            )
+
+            image_kwargs = {
+                name: arg
+                for name, arg in kwargs.items()
+                if isinstance(arg, PanSegImage)
+            }
+            timelapse_inputs = {
+                name: arg for name, arg in image_kwargs.items() if arg.is_timelapse
+            }
+
+            if not timelapse_inputs:
+                return func(*args, **kwargs)
+
+            t_lengths = {
+                name: _timepoint_count(image) for name, image in timelapse_inputs.items()
+            }
+            if len(set(t_lengths.values())) > 1:
+                raise ValueError(
+                    f"Timelapse inputs to {func.__name__} have different numbers of "
+                    "timepoints: "
+                    + ", ".join(f"{name}={n}" for name, n in t_lengths.items())
+                )
+            n_timepoints = next(iter(t_lengths.values()))
+
+            t_spacings = {
+                name: image.properties.t_spacing
+                for name, image in timelapse_inputs.items()
+            }
+            if len(set(t_spacings.values())) > 1:
+                raise ValueError(
+                    f"Timelapse inputs to {func.__name__} have different t_spacing "
+                    "(seconds, None = unknown): "
+                    + ", ".join(f"{name}={s}" for name, s in t_spacings.items())
+                )
+            shared_t_spacing = next(iter(t_spacings.values()))
+
+            still_inputs = {
+                name: arg for name, arg in image_kwargs.items() if not arg.is_timelapse
+            }
+            if still_inputs and not broadcast:
+                raise ValueError(
+                    f"Task {func.__name__} mixes timelapse and still image inputs: "
+                    f"{sorted(still_inputs)}. It does not opt in to broadcasting a "
+                    "still image to every timepoint."
+                )
+
+            # A timepoint loses t_spacing in the split; stamp the shared
+            # spacing back on so task bodies preserve it through derive_new
+            # and property tasks can override it. The restack reads the
+            # spacing back from the per-timepoint outputs.
+            timepoints_per_input = {
+                name: image.split_timepoints()
+                for name, image in timelapse_inputs.items()
+            }
+            for timepoints in timepoints_per_input.values():
+                for timepoint in timepoints:
+                    timepoint._properties.t_spacing = shared_t_spacing
+
+            tracker = kwargs.get("_tracker")
+            if tracker is not None:
+                tracker.total = n_timepoints
+
+            results = []
+            for i in range(n_timepoints):
+                call_kwargs = dict(kwargs)
+                for name, timepoints in timepoints_per_input.items():
+                    call_kwargs[name] = timepoints[i]
+                if "_tracker" in call_kwargs:
+                    call_kwargs["_tracker"] = None
+                result = func(**call_kwargs)
+                if isinstance(result, Task_message):
+                    return result
+                results.append(result)
+                if tracker is not None:
+                    tracker.progress += 1
+
+            return _restack_timepoint_outputs(results, timelapse_inputs)
+
+        setattr(wrapper, "__timepoint_mapped__", True)
         return wrapper
 
     if func is None:

@@ -282,7 +282,10 @@ class PanSegImage:
             PanSegImage: New image
         """
 
-        property_dict = self._properties.model_dump(exclude_none=True)
+        # Dump every key, including None-valued ones: a derived image may
+        # explicitly set a property to None (e.g. t_spacing on a timepoint),
+        # and dropping the key here would reject the kwarg below.
+        property_dict = self._properties.model_dump()
 
         if name == self.name:
             raise ValueError("New derived name should be different from the original")
@@ -384,6 +387,37 @@ class PanSegImage:
                     data=self.get_data(channel=ch),
                     name=self.name + f"_{ch}",
                     image_layout=new_image_layout,
+                )
+            )
+        return images
+
+    def split_timepoints(self) -> list["PanSegImage"]:
+        """Split a timelapse into single-timepoint images, one per timepoint.
+
+        Mirrors split_channels: each timepoint is a derive_new of this image
+        with the T axis dropped from the layout (TZYX->ZYX, TYX->YX,
+        TCZYX->CZYX, TCYX->CYX), the time slice as data and the name
+        f"{name}_t{i}" (the channel naming convention). A timepoint is not a
+        timelapse: t_spacing/t_unit are None on it, so the caller restacks
+        with restack_timepoints to stamp the parent spacing back on.
+
+        A still image returns itself as the only timepoint.
+        """
+        if not self.is_timelapse:
+            return [self]
+        assert self.time_axis is not None, "No time axis known!"
+
+        # The split image keeps every axis except T.
+        new_image_layout = ImageLayout(self.image_layout.value.replace("T", ""))
+
+        images = []
+        for t_index in range(self.shape[self.time_axis]):
+            images.append(
+                self.derive_new(
+                    data=np.take(self._data, t_index, axis=self.time_axis),
+                    name=self.name + f"_t{t_index}",
+                    image_layout=new_image_layout,
+                    t_spacing=None,
                 )
             )
         return images
@@ -719,6 +753,73 @@ class PanSegImage:
     def has_valid_original_voxel_size(self) -> bool:
         """Returns True if the original voxel size is valid (not None), False otherwise."""
         return self.original_voxel_size.voxels_size is not None
+
+
+def restack_timepoints(
+    timepoints: list[PanSegImage],
+    t_spacing: float | None,
+    t_unit: str = "s",
+    name: str | None = None,
+) -> PanSegImage:
+    """Restack single-timepoint images into a timelapse along a new outer T axis.
+
+    The inverse of split_timepoints: the timepoints are stacked with
+    np.stack along a new leading axis and the layout gains a T prefix
+    (ZYX->TZYX, YX->TYX). t_spacing/t_unit are stamped by the caller (they
+    are lost in the split) - usually the parent timelapse's spacing.
+
+    Args:
+        timepoints (list[PanSegImage]): single-timepoint images; every
+            timepoint must be a still image and agree in shape, layout,
+            voxel_size, semantic_type and t_spacing (the same checks as
+            merge_with).
+        t_spacing (float | None): time spacing between the restacked
+            timepoints in seconds, None if unknown.
+        t_unit (str): unit of the time spacing, normalized to seconds.
+        name (str | None): name of the restacked image; defaults to the
+            first timepoint's name plus "_restacked".
+    """
+    if not timepoints:
+        raise ValueError("Restacking needs at least one timepoint")
+
+    first = timepoints[0]
+    for timepoint in timepoints:
+        if timepoint.is_timelapse:
+            raise ValueError(
+                f"Image {timepoint.name} to restack is not a single timepoint "
+                f"(layout {timepoint.image_layout})"
+            )
+    for timepoint in timepoints[1:]:
+        if not all(
+            (
+                timepoint.semantic_type == first.semantic_type,
+                timepoint.voxel_size == first.voxel_size,
+                timepoint.dimensionality == first.dimensionality,
+                timepoint.image_layout == first.image_layout,
+                timepoint.shape == first.shape,
+                timepoint.properties.t_spacing == first.properties.t_spacing,
+            )
+        ):
+            raise ValueError(
+                f"Timepoints {first.name} and {timepoint.name} can't be "
+                "restacked, not compatible!"
+            )
+
+    if name is None:
+        name = first.name + "_restacked"
+
+    new_props = ImageProperties(
+        name=name,
+        semantic_type=first.semantic_type,
+        voxel_size=first.voxel_size,
+        image_layout=ImageLayout("T" + first.image_layout.value),
+        original_voxel_size=first.original_voxel_size,
+        source_file_name=first.source_file_name,
+        t_spacing=t_spacing,
+        t_unit=t_unit,
+    )
+    data = np.stack([timepoint.get_data() for timepoint in timepoints], axis=0)
+    return PanSegImage(data, new_props)
 
 
 def stack_sort(stack_layout: str, data, voxel_size):

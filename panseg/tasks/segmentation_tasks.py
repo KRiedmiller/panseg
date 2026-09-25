@@ -10,12 +10,13 @@ from panseg.functionals.segmentation import (
     multicut,
     mutex_ws,
 )
-from panseg.tasks import task_tracker
+from panseg.tasks import task_tracker, timepoint_map
 
 logger = logging.getLogger(__name__)
 
 
 @task_tracker
+@timepoint_map
 def dt_watershed_task(
     image: PanSegImage,
     threshold: float = 0.5,
@@ -36,6 +37,9 @@ def dt_watershed_task(
     This function applies the distance transform watershed algorithm to segment the input image.
     It handles both standard boundary probability maps and nuclei images, with options for
     various preprocessing and segmentation parameters.
+
+    On timelapse input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
 
     Args:
         image (PanSegImage): The input image to segment.
@@ -113,6 +117,7 @@ def dt_watershed_task(
 
 
 @task_tracker
+@timepoint_map
 def clustering_segmentation_task(
     image: PanSegImage,
     over_segmentation: PanSegImage | None = None,
@@ -121,6 +126,9 @@ def clustering_segmentation_task(
     post_min_size: int = 100,
 ) -> PanSegImage:
     """Agglomerative segmentation task.
+
+    On timelapse input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
 
     Args:
         image (PanSegImage): input image object
@@ -186,6 +194,7 @@ def clustering_segmentation_task(
 
 
 @task_tracker
+@timepoint_map
 def lmc_segmentation_task(
     boundary_pmap: PanSegImage,
     superpixels: PanSegImage,
@@ -203,6 +212,9 @@ def lmc_segmentation_task(
             A small value will steer the segmentation towards under-segmentation, while
             a high-value bias the segmentation towards the over-segmentation. (default: 0.5)
         post_min_size (int): minimal size of the segments after Multicut. (default: 100)
+
+    On timelapse input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
     """
     if (
         nuclei.semantic_type is SemanticType.PREDICTION
@@ -231,6 +243,7 @@ def lmc_segmentation_task(
 
 
 @task_tracker
+@timepoint_map
 def aio_watershed_task(
     image: PanSegImage,
     nuclei: Optional[PanSegImage],
@@ -287,6 +300,9 @@ def aio_watershed_task(
         beta (float, optional): Beta parameter for the agglomeration. Small values steer
             towards under-segmentation, while high values bias towards
             over-segmentation. Defaults to 0.6.
+
+    On timelapse input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
 
     Returns:
         PanSegImage: The segmented image as a new `PanSegImage` object.

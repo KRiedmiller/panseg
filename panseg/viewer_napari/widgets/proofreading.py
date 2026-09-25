@@ -680,19 +680,23 @@ class Proofreading_Tab:
             " will be merged<br>Labels marked with <strong>different colors</strong> will be split.",
         )
 
-        self.widget_label_timelapse = Label(
-            value="Timelapse: proofreading is applied to the timepoint selected below only.\n"
+        # The int input is the timepoint selector for timelapse segmentations:
+        # moving it re-binds the session and moves the T slider (one-way).
+        self.widget_timepoint_select = SpinBox(
+            value=0,
+            min=0,
+            max=0,
+            name="timepoint",
+            label="Timepoint",
+            tooltip="Timelapse: proofreading is applied to the timepoint selected here only.\n"
             "The Scribbles and Correct Labels canvases persist across timepoint switches:\n"
             "marks from a processed timepoint are applied to the next one if you run\n"
             "Split/Merge before cleaning them. Use 'Clean scribbles' after switching timepoints.",
         )
-
-        # The int input is the timepoint selector for timelapse segmentations:
-        # moving it re-binds the session and moves the T slider (one-way).
-        self.widget_timepoint_select = SpinBox(
-            value=0, min=0, max=0, name="timepoint", label="Timepoint"
-        )
         self.widget_timepoint_select.changed.connect(self._on_timepoint_changed)
+        self.widget_timepoint_container = Container(
+            widgets=[self.widget_timepoint_select], labels=True
+        )
 
         self.widget_label_extraction = Label(
             value="Double click in move mode to select labels.\n"
@@ -706,9 +710,8 @@ class Proofreading_Tab:
             widgets=[
                 self.tab_help,
                 self.widget_label_split_merge,
-                self.widget_label_timelapse,
                 self.widget_proofreading_initialisation,
-                self.widget_timepoint_select,
+                self.widget_timepoint_container,
                 self.widget_split_and_merge_from_scribbles,
                 self.widget_clean_scribble,
                 self.widget_label_extraction,
@@ -745,7 +748,7 @@ class Proofreading_Tab:
 
     def _timelapse_widgets(self) -> list:
         """Returns the widgets shown only for timelapse sessions."""
-        return [self.widget_label_timelapse, self.widget_timepoint_select]
+        return [self.widget_timepoint_container]
 
     def _hide_all_widgets(self):
         """Hide all widgets initially."""
@@ -944,14 +947,12 @@ class Proofreading_Tab:
         if self.handler.is_timelapse:
             self.widget_timepoint_select.max = self.handler.n_timepoints - 1
             self.widget_timepoint_select.value = self.handler.timepoint
-            self.widget_timepoint_select.show()
-            self.widget_label_timelapse.show()
+            self.widget_timepoint_container.show()
             viewer = napari.current_viewer()
             if viewer is not None:
                 viewer.dims.set_current_step(0, self.handler.timepoint)
         else:
-            self.widget_timepoint_select.hide()
-            self.widget_label_timelapse.hide()
+            self.widget_timepoint_container.hide()
 
     def _on_timepoint_changed(self, timepoint: int) -> None:
         """Re-binds the session to the selected timepoint and moves the T slider.

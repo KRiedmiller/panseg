@@ -601,17 +601,22 @@ class TestProofreadingHandlerTimelapse:
 class TestProofreadingTab:
     def test_init(self, tab):
         assert not tab.busy
-        assert len(tab.container) == 13
+        assert len(tab.container) == 12
+
+    def test_timepoint_select_has_label_and_tooltip(self, tab):
+        assert tab.widget_timepoint_select.label == "Timepoint"
+        assert "Timelapse" in tab.widget_timepoint_select.tooltip
+        assert "Clean scribbles" in tab.widget_timepoint_select.tooltip
 
     def test_hide_all(self, tab):
         app = get_qapp()
         tab.container.show()
         tab._show_all_widgets()
-        tab.widget_label_timelapse.show()
+        tab.widget_timepoint_container.show()
         tab.widget_timepoint_select.show()
         tab._hide_all_widgets()
         assert all(not w.visible for w in tab._session_widgets())
-        assert not tab.widget_label_timelapse.visible
+        assert not tab.widget_timepoint_container.visible
         assert not tab.widget_timepoint_select.visible
         tab.container.hide()
         app.quit()
@@ -622,7 +627,7 @@ class TestProofreadingTab:
         tab._show_all_widgets()
         assert all(w.visible for w in tab._session_widgets())
         # The timelapse-only widgets are managed per session type.
-        assert not tab.widget_label_timelapse.visible
+        assert not tab.widget_timepoint_container.visible
         assert not tab.widget_timepoint_select.visible
         tab.container.hide()
         app.quit()
@@ -1068,10 +1073,10 @@ class TestProofreadingTabTimelapse:
         tab._initialize_from_layer(napari_timelapse_segmentation)
 
         assert tab.handler.timepoint == 2
+        assert tab.widget_timepoint_container.visible
         assert tab.widget_timepoint_select.visible
         assert tab.widget_timepoint_select.value == 2
         assert tab.widget_timepoint_select.max == 2
-        assert tab.widget_label_timelapse.visible
         assert "Scribbles (t=2)" in viewer.layers
 
     def test_init_static_hides_timepoint_widgets(
@@ -1083,8 +1088,8 @@ class TestProofreadingTabTimelapse:
 
         tab._initialize_from_layer(napari_segmentation)
 
+        assert not tab.widget_timepoint_container.visible
         assert not tab.widget_timepoint_select.visible
-        assert not tab.widget_label_timelapse.visible
         assert not tab.handler.is_timelapse
 
     def test_reinit_removes_stale_helper_layers(

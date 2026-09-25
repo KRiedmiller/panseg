@@ -14,8 +14,11 @@ from panseg.core.image import (
     PanSegImage,
     SemanticType,
     import_image,
+    save_image,
     stack_sort,
 )
+from panseg.io.h5 import read_h5_axis_order, read_h5_time_spacing
+from panseg.io.io import guess_stack_layout
 from panseg.io.voxelsize import VoxelSize
 from tests.conftest import (
     TIMELAPSE_PROPS_KNOWN_T_SPACING,
@@ -1533,3 +1536,127 @@ def test_timelapse_segmentation_fixture(timelapse_segmentation):
         assert image.image_layout == ImageLayout.TZYX
         assert image.image_type == ImageType.LABEL
         assert image.properties.t_spacing == expected_t_spacing
+
+
+# --- Time-aware export (ticket 14): a time-bearing image roundtrips through
+# save_image/import_image with layout and t_spacing preserved. ---
+
+
+def _timelapse_ps_image(data, layout, t_spacing=None):
+    voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.15), unit="um")
+    return PanSegImage(
+        data=data,
+        properties=ImageProperties(
+            name="timelapse",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=voxel_size,
+            image_layout=ImageLayout(layout),
+            original_voxel_size=voxel_size,
+            t_spacing=t_spacing,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "layout, t_spacing",
+    [
+        ("TYX", 10.0),
+        ("TYX", None),
+        ("TZYX", 10.0),
+        ("TZYX", None),
+    ],
+)
+@pytest.mark.parametrize("export_format", ["tiff", "h5", "zarr"])
+def test_save_image_timelapse_roundtrip(
+    tmp_path, timelapse_segmentation, layout, t_spacing, export_format
+):
+    if layout == "TYX":
+        data = timelapse_segmentation[:, 0]
+    else:
+        data = timelapse_segmentation
+    image = _timelapse_ps_image(data, layout, t_spacing=t_spacing)
+    save_image(
+        image,
+        tmp_path,
+        "seg",
+        key="segmentation",
+        export_format=export_format,
+        data_type="uint16",
+    )
+
+    if export_format == "tiff":
+        path, key = tmp_path / "seg.tiff", None
+    elif export_format == "h5":
+        path, key = tmp_path / "seg.h5", "segmentation"
+    else:
+        path, key = tmp_path / "seg.zarr", "segmentation"
+
+    # the format metadata prefills the original layout
+    assert guess_stack_layout(path, key) == layout
+
+    imported = import_image(
+        path=path,
+        key=key,
+        image_name="reimported",
+        semantic_type="segmentation",
+        stack_layout=layout,
+    )
+    assert isinstance(imported, PanSegImage)
+    assert imported.image_layout == ImageLayout(layout)
+    assert imported.properties.t_spacing == t_spacing
+    assert imported.properties.t_unit == "s"
+    assert np.array_equal(imported.get_data(), data)
+
+
+def test_save_image_h5_writes_axis_order_on_every_export(tmp_path):
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image = PanSegImage(
+        np.zeros((5, 16, 16), dtype="uint16"),
+        ImageProperties(
+            name="seg",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=voxel_size,
+            image_layout=ImageLayout.ZYX,
+            original_voxel_size=voxel_size,
+        ),
+    )
+    save_image(
+        image,
+        tmp_path,
+        "seg",
+        key="segmentation",
+        export_format="h5",
+        data_type="uint16",
+    )
+    out = tmp_path / "seg.h5"
+    assert read_h5_axis_order(out, key="segmentation") == "ZYX"
+    assert read_h5_time_spacing(out, key="segmentation") == (None, "s")
+
+
+def test_to_h5_writes_axis_order_and_time_attrs(tmp_path, timelapse_segmentation):
+    image = _timelapse_ps_image(timelapse_segmentation, "TZYX", t_spacing=10.0)
+    out = tmp_path / "out.h5"
+    image.to_h5(out, "segmentation")
+    assert read_h5_axis_order(out, key="segmentation") == "TZYX"
+    assert read_h5_time_spacing(out, key="segmentation") == (10.0, "s")
+    reloaded = PanSegImage.from_h5(out, "segmentation")
+    assert reloaded.image_layout == ImageLayout.TZYX
+    assert reloaded.properties.t_spacing == 10.0
+
+
+@pytest.mark.parametrize("export_format", ["jpg", "png"])
+def test_save_image_timelapse_rejects_pil_formats(
+    tmp_path, timelapse_segmentation, export_format
+):
+    image = _timelapse_ps_image(timelapse_segmentation, "TZYX", t_spacing=10.0)
+    with pytest.raises(
+        ValueError, match=f"Export format {export_format} not recognized"
+    ):
+        save_image(
+            image,
+            tmp_path,
+            "seg",
+            export_format=export_format,
+            data_type="uint16",
+        )
+    assert list(tmp_path.iterdir()) == []

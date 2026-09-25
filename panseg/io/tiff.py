@@ -305,16 +305,24 @@ def create_tiff(
     stack: np.ndarray,
     voxel_size: VoxelSize,
     layout: str = "ZYX",
+    t_spacing: Optional[float] = None,
     force_bigtiff=False,
 ) -> None:
     """
     Create a tiff file from a numpy array
+
+    A time-bearing layout is always written as an OME-TIFF: the ImageJ
+    format cannot represent the time axis. BigTIFF is still only used when
+    the data exceeds 4 GiB or ``force_bigtiff`` is set.
 
     Args:
         path (Path): path to save the tiff file
         stack (np.ndarray): numpy array to save as tiff
         voxel_size (list or tuple): tuple of the voxel size
         voxel_size_unit (str): units of the voxel size
+        t_spacing (float | None): time spacing between timepoints in seconds,
+            written as OME-XML TimeIncrement when the layout carries a time
+            axis. None (unknown) exports SizeT without time metadata.
         force_bigtiff (bool): forces the use of bigtiff. Used for testing.
 
     """
@@ -351,8 +359,26 @@ def create_tiff(
         logical_stack, logical_axes = stack, "ZCYX"
         stack = stack.reshape(1, z, c, y, x, 1)
 
+    elif layout == "TYX":
+        assert stack.ndim == 3, "Stack dimensions must be in TYX order"
+        logical_stack, logical_axes = stack, "TYX"
+
+    elif layout == "TCYX":
+        assert stack.ndim == 4, "Stack dimensions must be in TCYX order"
+        logical_stack, logical_axes = stack, "TCYX"
+
+    elif layout == "TZYX":
+        assert stack.ndim == 4, "Stack dimensions must be in TZYX order"
+        logical_stack, logical_axes = stack, "TZYX"
+
+    elif layout == "TCZYX":
+        assert stack.ndim == 5, "Stack dimensions must be in TCZYX order"
+        logical_stack, logical_axes = stack, "TCZYX"
+
     else:
         raise ValueError(f"Layout {layout} not supported")
+
+    is_timelapse = "T" in layout
 
     if voxel_size.voxels_size is not None:
         assert len(voxel_size.voxels_size) == 3, (
@@ -365,27 +391,33 @@ def create_tiff(
     resolution = (1.0 / x, 1.0 / y)
     # Save output results as tiff
 
-    if stack.nbytes > 4294967295 or force_bigtiff:
+    use_bigtiff = stack.nbytes > 4294967295 or force_bigtiff
+    if is_timelapse or use_bigtiff:
         # OME-XML (unlike the shaped-JSON format) does not read `spacing`/`unit`
         # metadata keys and rejects the 6-D TZCYXS reshape, so write the logical
         # stack with explicit PhysicalSize* attributes to keep the voxel size.
+        ome_metadata = {
+            "axes": logical_axes,
+            "PhysicalSizeX": x,
+            "PhysicalSizeXUnit": voxel_size.unit,
+            "PhysicalSizeY": y,
+            "PhysicalSizeYUnit": voxel_size.unit,
+            "PhysicalSizeZ": spacing,
+            "PhysicalSizeZUnit": voxel_size.unit,
+        }
+        if is_timelapse and t_spacing is not None:
+            # the time spacing is canonical seconds
+            ome_metadata["TimeIncrement"] = t_spacing
+            ome_metadata["TimeIncrementUnit"] = "s"
         tifffile.imwrite(
             path,
             data=logical_stack,
             dtype=logical_stack.dtype,
-            bigtiff=True,
+            bigtiff=use_bigtiff,
             ome=True,
             photometric="minisblack",
             resolution=resolution,
-            metadata={
-                "axes": logical_axes,
-                "PhysicalSizeX": x,
-                "PhysicalSizeXUnit": voxel_size.unit,
-                "PhysicalSizeY": y,
-                "PhysicalSizeYUnit": voxel_size.unit,
-                "PhysicalSizeZ": spacing,
-                "PhysicalSizeZUnit": voxel_size.unit,
-            },
+            metadata=ome_metadata,
         )
     else:
         tifffile.imwrite(

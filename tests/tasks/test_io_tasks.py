@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import trimesh
 
 from panseg.core.image import (
     ImageLayout,
@@ -364,6 +365,117 @@ def test_label_io_mesh_error(tmp_path):
     )
     assert isinstance(out, Task_message)
     assert "Mesh export only supported for 3D" in out.message
+
+
+# --- Time-aware mesh export (ticket 14): a 3D timelapse segmentation writes
+# one mesh file per timepoint, empty timepoints included. ---
+
+
+def _timelapse_mesh_image(seg):
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    return PanSegImage(
+        data=seg,
+        properties=ImageProperties(
+            name="seg",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=voxel_size,
+            image_layout=ImageLayout.TZYX,
+            original_voxel_size=voxel_size,
+            t_spacing=10.0,
+        ),
+    )
+
+
+@pytest.mark.parametrize("export_mesh", ["glb", "obj", "ply"])
+def test_export_mesh_timelapse_one_file_per_timepoint(
+    tmp_path, timelapse_segmentation, export_mesh
+):
+    seg = timelapse_segmentation.copy()
+    seg[1] = 0  # an empty timepoint still gets its file
+    image = _timelapse_mesh_image(seg)
+
+    export_image_task(
+        image=image,
+        export_directory=tmp_path,
+        name_pattern="seg",
+        key="segmentation",
+        export_format="tiff",
+        data_type="uint16",
+        export_mesh=export_mesh,
+        close_mesh=False,
+    )
+
+    # 1:1 timepoint-file mapping, 0-based, zero-padded to three digits
+    expected = [f"seg_t{i:03d}.{export_mesh}" for i in range(4)]
+    assert sorted(p.name for p in tmp_path.glob(f"seg_t*.{export_mesh}")) == expected
+    assert not (tmp_path / f"seg.{export_mesh}").exists()
+
+    # three labeled blobs per populated timepoint, none in the empty one
+    # (glb reloads as a Scene; obj/ply merge into a single mesh)
+    for t_index, n_geometries in [(0, 3), (1, 0), (2, 3), (3, 3)]:
+        loaded = trimesh.load(tmp_path / f"seg_t{t_index:03d}.{export_mesh}")
+        if export_mesh == "glb":
+            assert len(loaded.geometry) == n_geometries
+        elif n_geometries == 0:
+            assert loaded.is_empty
+        else:
+            assert not loaded.is_empty
+
+
+def test_export_mesh_still_3d_single_file(tmp_path, timelapse_segmentation):
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image = PanSegImage(
+        data=timelapse_segmentation[0],
+        properties=ImageProperties(
+            name="seg",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=voxel_size,
+            image_layout=ImageLayout.ZYX,
+            original_voxel_size=voxel_size,
+        ),
+    )
+    export_image_task(
+        image=image,
+        export_directory=tmp_path,
+        name_pattern="seg",
+        key="segmentation",
+        export_format="tiff",
+        data_type="uint16",
+        export_mesh="glb",
+        close_mesh=False,
+    )
+    assert (tmp_path / "seg.glb").exists()
+    assert not list(tmp_path.glob("seg_t*.glb"))
+    scene = trimesh.load(tmp_path / "seg.glb")
+    assert len(scene.geometry) == 3
+
+
+def test_export_mesh_tyx_segmentation_still_gated(tmp_path):
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image = PanSegImage(
+        data=np.zeros((4, 16, 16), dtype="uint16"),
+        properties=ImageProperties(
+            name="seg",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=voxel_size,
+            image_layout=ImageLayout.TYX,
+            original_voxel_size=voxel_size,
+            t_spacing=10.0,
+        ),
+    )
+    out = export_image_task(
+        image=image,
+        export_directory=tmp_path,
+        name_pattern="seg",
+        key="segmentation",
+        export_format="tiff",
+        data_type="uint16",
+        export_mesh="glb",
+        close_mesh=False,
+    )
+    assert isinstance(out, Task_message)
+    assert "Mesh export only supported for 3D" in out.message
+    assert not list(tmp_path.glob("seg_t*.glb"))
 
 
 def test_io_slicing_trip(tmp_path):

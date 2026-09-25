@@ -12,7 +12,7 @@ from napari.types import LayerDataTuple
 from pydantic import BaseModel, model_validator
 
 import panseg.functionals.dataprocessing as dp
-from panseg.io.h5 import H5_EXTENSIONS, create_h5
+from panseg.io.h5 import H5_EXTENSIONS, create_h5, read_h5_time_spacing
 from panseg.io.io import smart_load_with_vs
 from panseg.io.mesh import create_mesh
 from panseg.io.tiff import (
@@ -22,7 +22,7 @@ from panseg.io.tiff import (
     read_ome_time_spacing,
 )
 from panseg.io.voxelsize import VoxelSize
-from panseg.io.zarr import create_zarr
+from panseg.io.zarr import ZARR_EXTENSIONS, create_zarr, read_zarr_time_spacing
 
 logger = logging.getLogger(__name__)
 last_warning = 0.0
@@ -517,6 +517,10 @@ class PanSegImage:
             if voxel_size.voxels_size is not None:
                 f[key].attrs["element_size_um"] = voxel_size.voxels_size
             f[key].attrs["panseg_image_metadata_json"] = metadata
+            f[key].attrs["axis_order"] = self.image_layout.value
+            if self.is_timelapse and self.properties.t_spacing is not None:
+                f[key].attrs["t_spacing"] = self.properties.t_spacing
+                f[key].attrs["t_spacing_unit"] = self.properties.t_unit
 
     @classmethod
     def from_h5(cls, path: Path | str, key: str) -> "PanSegImage":
@@ -911,12 +915,16 @@ def import_image(
     if voxel_size is None:
         voxel_size = VoxelSize()
 
-    # The time spacing is extracted from OME-TIFF metadata only; other
-    # formats stay T-unaware and import with it unknown.
+    # The time spacing is extracted from OME-TIFF metadata or the PanSeg
+    # h5/zarr attrs; other formats stay T-unaware and import with it unknown.
     t_spacing: float | None = None
     t_unit = "s"
     if is_tiff:
         t_spacing, t_unit = read_ome_time_spacing(path)
+    elif path.suffix.lower() in H5_EXTENSIONS:
+        t_spacing, t_unit = read_h5_time_spacing(path, key)
+    elif path.suffix.lower() in ZARR_EXTENSIONS:
+        t_spacing, t_unit = read_zarr_time_spacing(path, key)
 
     if not len(stack_layout.replace("-", "")) == len(data.shape):
         raise ValueError(
@@ -1130,6 +1138,7 @@ def save_image(
             stack=data,
             voxel_size=voxel_size,
             layout=image.image_layout.value,
+            t_spacing=image.properties.t_spacing,
         )
 
     elif export_format == "zarr":
@@ -1142,6 +1151,9 @@ def save_image(
             stack=data,
             voxel_size=voxel_size,
             key=key,
+            axis_order=image.image_layout.value,
+            t_spacing=image.properties.t_spacing,
+            t_spacing_unit=image.properties.t_unit,
         )
 
     elif export_format == "h5":
@@ -1149,7 +1161,15 @@ def save_image(
             raise ValueError("Key is required for h5 format")
 
         file_path_name = directory / f"{name_pattern}.h5"
-        create_h5(path=file_path_name, stack=data, voxel_size=voxel_size, key=key)
+        create_h5(
+            path=file_path_name,
+            stack=data,
+            voxel_size=voxel_size,
+            key=key,
+            axis_order=image.image_layout.value,
+            t_spacing=image.properties.t_spacing,
+            t_spacing_unit=image.properties.t_unit,
+        )
 
     else:
         raise ValueError(
@@ -1167,10 +1187,27 @@ def save_image(
                 "Mesh export only supported for 3D, "
                 f"received: {image.dimensionality}, {image.name}"
             )
-        file_path_name = directory / f"{name_pattern}.{export_mesh}"
-        create_mesh(
-            path=file_path_name,
-            stack=data,
-            voxel_size=voxel_size,
-            close_mesh=close_mesh,
-        )
+        if image.is_timelapse:
+            # one mesh file per timepoint keeps the 1:1 timepoint-file
+            # mapping; empty timepoints export their (empty) scene too
+            time_axis = image.time_axis
+            assert time_axis is not None, "No time axis known!"
+            for t_index in range(data.shape[time_axis]):
+                frame = np.take(data, t_index, axis=time_axis)
+                file_path_name = (
+                    directory / f"{name_pattern}_t{t_index:03d}.{export_mesh}"
+                )
+                create_mesh(
+                    path=file_path_name,
+                    stack=frame,
+                    voxel_size=voxel_size,
+                    close_mesh=close_mesh,
+                )
+        else:
+            file_path_name = directory / f"{name_pattern}.{export_mesh}"
+            create_mesh(
+                path=file_path_name,
+                stack=data,
+                voxel_size=voxel_size,
+                close_mesh=close_mesh,
+            )

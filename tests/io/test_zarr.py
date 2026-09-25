@@ -12,6 +12,7 @@ from panseg.io.zarr import (
     load_zarr,
     read_zarr_axis_order,
     read_zarr_shape,
+    read_zarr_time_spacing,
     read_zarr_voxel_size,
     rename_zarr_key,
 )
@@ -134,6 +135,75 @@ def test_read_zarr_axis_order_present(tmp_path):
     group["raw"].attrs["axis_order"] = "TZYX"
     assert read_zarr_axis_order(tmp_path / "out.zarr", key="raw") == "TZYX"
     assert read_zarr_axis_order(tmp_path / "out.zarr") == "TZYX"
+
+
+# --- Time-aware export (ticket 14): PanSeg zarr exports carry the axis order
+# on every export and the time spacing attrs when known. ---
+
+
+def test_create_zarr_writes_axis_order_on_every_export(tmp_path):
+    out = tmp_path / "out.zarr"
+    create_zarr(
+        out,
+        np.empty((5, 16, 16), dtype="float32"),
+        "raw",
+        VoxelSize(),
+        axis_order="ZYX",
+    )
+    assert read_zarr_axis_order(out, key="raw") == "ZYX"
+
+
+def test_create_zarr_writes_time_spacing_when_known(tmp_path):
+    out = tmp_path / "out.zarr"
+    create_zarr(
+        out,
+        np.empty((4, 5, 16, 16), dtype="float32"),
+        "raw",
+        VoxelSize(),
+        axis_order="TZYX",
+        t_spacing=10.0,
+    )
+    group = zarr.open_group(store=str(out), mode="r")
+    assert group["raw"].attrs["t_spacing"] == 10.0
+    assert group["raw"].attrs["t_spacing_unit"] == "s"
+    assert read_zarr_time_spacing(out, key="raw") == (10.0, "s")
+
+
+def test_create_zarr_unknown_t_spacing_writes_no_time_attrs(tmp_path):
+    out = tmp_path / "out.zarr"
+    create_zarr(
+        out,
+        np.empty((4, 5, 16, 16), dtype="float32"),
+        "raw",
+        VoxelSize(),
+        axis_order="TZYX",
+    )
+    group = zarr.open_group(store=str(out), mode="r")
+    assert "t_spacing" not in group["raw"].attrs
+    assert "t_spacing_unit" not in group["raw"].attrs
+    assert read_zarr_time_spacing(out, key="raw") == (None, "s")
+
+
+def test_create_zarr_time_attrs_gated_on_time_axis(tmp_path):
+    # a spacing without a T axis in the axis order writes no time attrs
+    out = tmp_path / "out.zarr"
+    create_zarr(
+        out,
+        np.empty((5, 16, 16), dtype="float32"),
+        "raw",
+        VoxelSize(),
+        axis_order="ZYX",
+        t_spacing=10.0,
+    )
+    group = zarr.open_group(store=str(out), mode="r")
+    assert "t_spacing" not in group["raw"].attrs
+    assert "t_spacing_unit" not in group["raw"].attrs
+
+
+def test_read_zarr_time_spacing_absent_for_older_files(tmp_path):
+    out = tmp_path / "out.zarr"
+    create_zarr(out, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    assert read_zarr_time_spacing(out, key="raw") == (None, "s")
 
 
 def test_auto_key_single_dataset(tmp_path):

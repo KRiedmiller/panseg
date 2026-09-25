@@ -551,6 +551,125 @@ def test_check_ome_single_file_ignores_non_ome(tmp_path):
     check_ome_single_file(out)
 
 
+# --- Time-aware export (ticket 14): a time-bearing image is always written
+# as OME-TIFF (the ImageJ branch stays time-less), T fills the T slot of the
+# TZCYXS order, TimeIncrement is written only when the spacing is known. ---
+
+TIMELAPSE_EXPORT_CASES = [
+    pytest.param(
+        "TYX", (4, 16, 16), {"SizeT": "4", "SizeC": "1", "SizeZ": "1"}, id="TYX"
+    ),
+    pytest.param(
+        "TCYX", (4, 2, 16, 16), {"SizeT": "4", "SizeC": "2", "SizeZ": "1"}, id="TCYX"
+    ),
+    pytest.param(
+        "TZYX", (4, 5, 16, 16), {"SizeT": "4", "SizeC": "1", "SizeZ": "5"}, id="TZYX"
+    ),
+    pytest.param(
+        "TCZYX",
+        (4, 2, 5, 16, 16),
+        {"SizeT": "4", "SizeC": "2", "SizeZ": "5"},
+        id="TCZYX",
+    ),
+]
+
+
+@pytest.mark.parametrize("layout,shape,_sizes", TIMELAPSE_EXPORT_CASES)
+def test_create_tiff_timelapse_layouts_write_ome(tmp_path, layout, shape, _sizes):
+    data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
+    out = tmp_path / "out.tiff"
+    create_tiff(out, data, VoxelSize(voxels_size=(1.0, 1.0, 1.0)), layout=layout)
+    with tifffile.TiffFile(out) as tiff:
+        assert tiff.series[0].axes == layout
+        assert tiff.series[0].shape == shape
+        assert tiff.imagej_metadata is None
+        loaded = tiff.asarray()
+    assert np.array_equal(loaded, data)
+
+
+@pytest.mark.parametrize("layout,shape,sizes", TIMELAPSE_EXPORT_CASES)
+def test_create_tiff_timelapse_ome_pixel_sizes(tmp_path, layout, shape, sizes):
+    data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
+    out = tmp_path / "out.tiff"
+    voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
+    create_tiff(out, data, voxel_size, layout=layout)
+    with tifffile.TiffFile(out) as tiff:
+        pixels = _ome_pixels(ElementTree.fromstring(tiff.ome_metadata))
+    for key, value in sizes.items():
+        assert pixels.get(key) == value
+    assert _assert_no_warnings(read_tiff_voxel_size, out) == voxel_size
+
+
+@pytest.mark.parametrize("layout,shape,_sizes", TIMELAPSE_EXPORT_CASES)
+def test_create_tiff_timelapse_time_increment(tmp_path, layout, shape, _sizes):
+    data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
+    out = tmp_path / "out.tiff"
+    create_tiff(
+        out,
+        data,
+        VoxelSize(voxels_size=(1.0, 1.0, 1.0)),
+        layout=layout,
+        t_spacing=10.5,
+    )
+    with tifffile.TiffFile(out) as tiff:
+        pixels = _ome_pixels(ElementTree.fromstring(tiff.ome_metadata))
+    assert pixels.get("SizeT") == "4"
+    assert pixels.get("TimeIncrement") == "10.5"
+    assert pixels.get("TimeIncrementUnit") == "s"
+    assert read_ome_time_spacing(out) == (10.5, "s")
+
+
+@pytest.mark.parametrize("layout,shape,_sizes", TIMELAPSE_EXPORT_CASES)
+def test_create_tiff_timelapse_unknown_t_spacing_no_time_metadata(
+    tmp_path, layout, shape, _sizes
+):
+    data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
+    out = tmp_path / "out.tiff"
+    create_tiff(out, data, VoxelSize(voxels_size=(1.0, 1.0, 1.0)), layout=layout)
+    with tifffile.TiffFile(out) as tiff:
+        pixels = _ome_pixels(ElementTree.fromstring(tiff.ome_metadata))
+    assert pixels.get("SizeT") == "4"
+    assert pixels.get("TimeIncrement") is None
+    assert pixels.get("TimeIncrementUnit") is None
+    assert not [e for e in pixels if e.tag.endswith("Plane")]
+    assert read_ome_time_spacing(out) == (None, "s")
+
+
+def test_create_tiff_timelapse_bigtiff_behavior_unchanged(tmp_path):
+    # forced bigtiff stays available for T layouts; BigTIFF is still only
+    # chosen when forced or above the 4 GiB boundary
+    data = (np.random.default_rng(0).random((4, 5, 16, 16)) * 100).astype("uint16")
+    out = tmp_path / "out.tiff"
+    create_tiff(
+        out,
+        data,
+        VoxelSize(voxels_size=(1.0, 1.0, 1.0)),
+        layout="TZYX",
+        t_spacing=2.0,
+        force_bigtiff=True,
+    )
+    with tifffile.TiffFile(out) as tiff:
+        assert tiff.is_bigtiff
+        assert tiff.series[0].axes == "TZYX"
+        assert np.array_equal(tiff.asarray(), data)
+    assert read_ome_time_spacing(out) == (2.0, "s")
+
+
+def test_create_tiff_imagej_branch_stays_timeless(tmp_path):
+    # a non-T layout keeps the ImageJ writer, even when a t_spacing is passed
+    out = tmp_path / "out.tiff"
+    create_tiff(
+        out,
+        np.zeros((5, 16, 16), dtype="uint16"),
+        VoxelSize(voxels_size=(1.0, 1.0, 1.0)),
+        layout="ZYX",
+        t_spacing=10.0,
+    )
+    with tifffile.TiffFile(out) as tiff:
+        assert tiff.imagej_metadata is not None
+        assert tiff.ome_metadata is None
+
+
 def test_ome_timelapse_multifile_chain(ome_timelapse_multifile):
     first, second, data = ome_timelapse_multifile
     assert first.exists()

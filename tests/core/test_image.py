@@ -17,7 +17,7 @@ from panseg.core.image import (
     save_image,
     stack_sort,
 )
-from panseg.io.h5 import read_h5_axis_order, read_h5_time_spacing
+from panseg.io.h5 import read_h5_axis_order, read_h5_time_spacing, create_h5
 from panseg.io.io import guess_stack_layout
 from panseg.io.voxelsize import VoxelSize
 from tests.conftest import (
@@ -471,6 +471,39 @@ def test_panseg_image_to_napari_layer_tuple():
     assert layer_tuple[2] == ps_image.image_type.value
 
 
+@pytest.mark.parametrize(
+    "image_layout, shape, expected_axis_labels",
+    [
+        (ImageLayout.YX, (4, 5), ["y", "x"]),
+        (ImageLayout.CYX, (2, 4, 5), ["c", "y", "x"]),
+        (ImageLayout.ZYX, (3, 4, 5), ["z", "y", "x"]),
+        (ImageLayout.CZYX, (2, 3, 4, 5), ["c", "z", "y", "x"]),
+        (ImageLayout.TYX, (7, 4, 5), ["t", "y", "x"]),
+        (ImageLayout.TCYX, (7, 2, 4, 5), ["t", "c", "y", "x"]),
+        (ImageLayout.TZYX, (7, 3, 4, 5), ["t", "z", "y", "x"]),
+        (ImageLayout.TCZYX, (7, 2, 3, 4, 5), ["t", "c", "z", "y", "x"]),
+    ],
+)
+def test_to_napari_layer_tuple_axis_labels(image_layout, shape, expected_axis_labels):
+    data = np.random.rand(*shape)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="test_image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=image_layout,
+        original_voxel_size=voxel_size,
+    )
+    ps_image = PanSegImage(data, image_props)
+    layer_tuple = tuple(ps_image.to_napari_layer_tuple())
+
+    assert layer_tuple[1]["axis_labels"] == expected_axis_labels
+
+    # napari accepts the layer tuple with the axis labels
+    layer = Image(layer_tuple[0], **layer_tuple[1])
+    assert layer.data.shape == shape
+
+
 def test_panseg_image_scale_property():
     data = np.random.rand(10, 10, 10)
     voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 1.0), unit="um")
@@ -853,6 +886,35 @@ def test_import_image_tzyx_length_one_t_slice_squeezes(make_ome_timelapse):
     assert image.image_layout == ImageLayout.ZYX
     assert image.shape == (5, 16, 16)
     assert image.properties.t_spacing is None
+
+
+def test_import_image_t_layout_non_ome_stays_unknown(tmp_path):
+    """T layouts are accepted for every format: the layout is the user's
+    explicit assertion about their data; the spacing stays unknown for
+    formats that cannot carry it."""
+    path = tmp_path / "timelapse.h5"
+    create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+
+    image = import_image(path=path, key="raw", stack_layout="TZYX")
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (4, 5, 16, 16)
+    assert image.properties.t_spacing is None
+    assert image.properties.t_unit == "s"
+
+
+def test_import_image_tczyx_non_ome_splits_channels(tmp_path):
+    path = tmp_path / "multichannel_timelapse.h5"
+    create_h5(path, np.empty((4, 2, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+
+    images = import_image(path=path, key="raw", stack_layout="TCZYX")
+    assert isinstance(images, list)
+    assert len(images) == 2
+    for ch, image in enumerate(images):
+        assert image.image_layout == ImageLayout.TZYX
+        assert image.shape == (4, 5, 16, 16)
+        assert image.name == f"image_{ch}"
+        assert image.properties.t_spacing is None
 
 
 def test_split_image_CZYX():

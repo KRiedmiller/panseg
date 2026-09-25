@@ -68,6 +68,38 @@ def napari_raw_4d():
 
 
 @pytest.fixture
+def napari_timelapse():
+    data = np.random.rand(4, 5, 16, 16).astype("float32")
+    voxel_size = (1.0, 1.0, 1.0)
+    metadata = {
+        "semantic_type": SemanticType.RAW,
+        "voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "original_voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "image_layout": "TZYX",
+        "t_spacing": 10.0,
+        "t_unit": "s",
+        "id": uuid4(),
+    }
+    return Image(data, metadata=metadata, name="test_timelapse")
+
+
+@pytest.fixture
+def napari_timelapse_unknown_t_spacing():
+    data = np.random.rand(4, 5, 16, 16).astype("float32")
+    voxel_size = (1.0, 1.0, 1.0)
+    metadata = {
+        "semantic_type": SemanticType.RAW,
+        "voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "original_voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "image_layout": "TZYX",
+        "t_spacing": None,
+        "t_unit": "s",
+        "id": uuid4(),
+    }
+    return Image(data, metadata=metadata, name="test_timelapse_unknown")
+
+
+@pytest.fixture
 def napari_prediction():
     data = np.random.rand(10, 10, 10)
     voxel_size = (1.0, 1.0, 1.0)

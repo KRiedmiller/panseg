@@ -480,6 +480,7 @@ class PanSegImage:
             {
                 "name": self.name,
                 "scale": self.scale,
+                "axis_labels": [ax.lower() for ax in self.image_layout.value],
                 "metadata": metadata,
             },
             self.image_type.value,

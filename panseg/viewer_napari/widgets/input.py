@@ -17,7 +17,7 @@ from panseg.io.io import guess_stack_layout
 from panseg.io.pil import PIL_EXTENSIONS
 from panseg.io.tiff import TIFF_EXTENSIONS
 from panseg.io.zarr import list_zarr_keys
-from panseg.tasks.dataprocessing_tasks import set_voxel_size_task
+from panseg.tasks.dataprocessing_tasks import set_t_spacing_task, set_voxel_size_task
 from panseg.tasks.io_tasks import import_image_task
 from panseg.viewer_napari import log
 from panseg.viewer_napari.widgets.utils import (
@@ -73,6 +73,11 @@ class Input_Tab:
 
         # self.widget_set_voxel_size.called.connect(self._on_set_voxel_size_layer_done)
 
+        # @@@@@ Set time spacing @@@@@
+        self.widget_set_t_spacing = self.factory_set_t_spacing()
+        self.widget_set_t_spacing.self.bind(self)
+        self.widget_set_t_spacing.hide()
+
         # @@@@@ Show info @@@@@
         self.widget_info = Label(
             value="Select layer to show information here...",
@@ -103,6 +108,8 @@ class Input_Tab:
                 self.widget_info,
                 div("Set voxel size"),
                 self.widget_set_voxel_size,
+                div("Set time spacing"),
+                self.widget_set_t_spacing,
             ],
             labels=False,
         )
@@ -315,6 +322,18 @@ class Input_Tab:
         logger.debug("_on_done called!")
         self.look_up_dataset_keys(self.widget_open_file.path.value)
 
+    def _selected_panseg_image(self) -> PanSegImage:
+        """Return the PanSegImage of the layer selected in the Details widget."""
+        layer = self.widget_details_layer_select.layer.value
+        if layer is None:
+            raise ValueError("No layer selected.")
+
+        assert isinstance(layer, (Image, Labels)), (
+            "Only Image and Labels layers are supported for PanSeg."
+            f" Layer was {layer}, type: {type(layer)}"
+        )
+        return PanSegImage.from_napari_layer(layer)
+
     @magic_factory(
         call_button="Set Voxel Size",
         voxel_size={
@@ -327,15 +346,7 @@ class Input_Tab:
         voxel_size: tuple[float, float, float] = (1.0, 1.0, 1.0),
     ) -> None:
         """Set the voxel size of the selected layer."""
-        layer = self.widget_details_layer_select.layer.value
-        if layer is None:
-            raise ValueError("No layer selected.")
-
-        assert isinstance(layer, (Image, Labels)), (
-            "Only Image and Labels layers are supported for PanSeg voxel size."
-            f"layer was {layer}, type: {type(layer)}"
-        )
-        ps_image = PanSegImage.from_napari_layer(layer)
+        ps_image = self._selected_panseg_image()
         return schedule_task(
             set_voxel_size_task,
             task_kwargs={
@@ -344,11 +355,56 @@ class Input_Tab:
             },
         )
 
+    @magic_factory(
+        call_button="Set Time Spacing",
+        t_spacing={
+            "label": "Time spacing [s]",
+            "tooltip": "Set the time spacing between timepoints in seconds.\n"
+            "Leave empty to mark the time spacing as unknown.",
+            "widget_type": "LineEdit",
+        },
+    )
+    def factory_set_t_spacing(
+        self,
+        t_spacing: str = "",
+    ) -> None:
+        """Set the time spacing of the selected timelapse layer."""
+        ps_image = self._selected_panseg_image()
+        if not ps_image.is_timelapse:
+            raise ValueError(
+                f"Layer {ps_image.name} is not a timelapse, no time spacing to set."
+            )
+
+        value = t_spacing.strip()
+        if value == "":
+            t_spacing_value: float | None = None
+        else:
+            try:
+                t_spacing_value = float(value)
+            except ValueError:
+                logger.warning(f"Invalid time spacing {value!r}, nothing scheduled.")
+                return
+            if t_spacing_value <= 0:
+                logger.warning(
+                    f"Time spacing must be positive, got {t_spacing_value}, "
+                    "nothing scheduled."
+                )
+                return
+
+        return schedule_task(
+            set_t_spacing_task,
+            task_kwargs={
+                "image": ps_image,
+                "t_spacing": t_spacing_value,
+            },
+        )
+
     def _on_details_layer_select_changed(self, layer: Optional[Layer]):
         logger.debug(f"_on_details_layer_select_changed called for layer {layer}!")
 
         if layer is None:
             self.widget_set_voxel_size.hide()
+            self.widget_set_t_spacing.hide()
             self.widget_info.hide()
             return
 
@@ -364,6 +420,11 @@ class Input_Tab:
         self.widget_info.show()
 
         ps_image = PanSegImage.from_napari_layer(layer)
+        if ps_image.is_timelapse:
+            self.widget_set_t_spacing.show()
+        else:
+            self.widget_set_t_spacing.hide()
+
         if ps_image.has_valid_voxel_size():
             voxel_size_formatted = "("
             for vs in ps_image.voxel_size:
@@ -385,6 +446,14 @@ class Input_Tab:
             f"{parts['shape']:<30} {parts['voxels']:<30}\n"
             f"{parts['type']:<30} {parts['layout']:<30}"
         )
+        if ps_image.is_timelapse:
+            t_spacing = ps_image.properties.t_spacing
+            t_spacing_formatted = (
+                f"{t_spacing:.2f} {ps_image.properties.t_unit}"
+                if t_spacing is not None
+                else "None"
+            )
+            str_info += f"\n{f'Time spacing: {t_spacing_formatted}':<30}"
 
         font = QtGui.QFont("Monospace")
         font.setStyleHint(QtGui.QFont.TypeWriter)

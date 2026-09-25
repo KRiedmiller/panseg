@@ -6,3 +6,22 @@
 --8<-- "widgets/input_tab/open_file.py"
 ```
 
+## Timelapse
+
+When you pick a file, the **Stack layout** field is prefilled. OME-TIFF files
+use the axis string from their OME-XML metadata, PanSeg h5 and zarr files use
+the `axis_order` attribute written on export, and everything else falls back
+to a guess from the array shape. The layout can be any permutation of the
+letters `t`, `c`, `z`, `y`, `x` that match your file, so a 3D timelapse
+prefills as `TZYX`.
+
+OME-TIFF import also reads the time spacing from the timing metadata
+(`TimeIncrement` or `Plane.DeltaT`) when the file has any. Most timelapses do
+not carry it, so the spacing is usually unknown after import. Select the
+timelapse layer in **Details** to set it with the **Time spacing [s]** field,
+which only appears for timelapse layers. See the [Timelapse chapter](../timelapse/index.md)
+for what the spacing is used for and what frame-by-frame processing means.
+
+Multichannel timelapses (TCYX, TCZYX) import as one single-channel timelapse
+layer per channel, the same as multichannel stills.
+

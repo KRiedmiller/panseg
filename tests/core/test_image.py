@@ -17,7 +17,7 @@ from panseg.core.image import (
     save_image,
     stack_sort,
 )
-from panseg.io.h5 import read_h5_axis_order, read_h5_time_spacing, create_h5
+from panseg.io.h5 import create_h5, read_h5_axis_order, read_h5_time_spacing
 from panseg.io.io import guess_stack_layout
 from panseg.io.voxelsize import VoxelSize
 from tests.conftest import (
@@ -70,30 +70,84 @@ def test_image_layout_enum():
 # Derived layout properties across all nine layouts: the layout string alone
 # carries every axis, nothing about the axes is stored.
 LAYOUT_DERIVED_PROPS = [
-    pytest.param(ImageLayout.YX, None, None, ImageDimensionality.TWO, False, id="YX"),
-    pytest.param(ImageLayout.CYX, 0, None, ImageDimensionality.TWO, False, id="CYX"),
     pytest.param(
-        ImageLayout.ZYX, None, None, ImageDimensionality.THREE, False, id="ZYX"
+        ImageLayout.YX, None, None, ImageDimensionality.TWO, False, (0, 1), id="YX"
     ),
     pytest.param(
-        ImageLayout.CZYX, 0, None, ImageDimensionality.THREE, False, id="CZYX"
+        ImageLayout.CYX, 0, None, ImageDimensionality.TWO, False, (1, 2), id="CYX"
     ),
     pytest.param(
-        ImageLayout.ZCYX, 1, None, ImageDimensionality.THREE, False, id="ZCYX"
+        ImageLayout.ZYX,
+        None,
+        None,
+        ImageDimensionality.THREE,
+        False,
+        (0, 1, 2),
+        id="ZYX",
     ),
-    pytest.param(ImageLayout.TYX, None, 0, ImageDimensionality.TWO, True, id="TYX"),
-    pytest.param(ImageLayout.TCYX, 1, 0, ImageDimensionality.TWO, True, id="TCYX"),
-    pytest.param(ImageLayout.TZYX, None, 0, ImageDimensionality.THREE, True, id="TZYX"),
-    pytest.param(ImageLayout.TCZYX, 1, 0, ImageDimensionality.THREE, True, id="TCZYX"),
+    pytest.param(
+        ImageLayout.CZYX,
+        0,
+        None,
+        ImageDimensionality.THREE,
+        False,
+        (1, 2, 3),
+        id="CZYX",
+    ),
+    pytest.param(
+        ImageLayout.ZCYX,
+        1,
+        None,
+        ImageDimensionality.THREE,
+        False,
+        (0, 2, 3),
+        id="ZCYX",
+    ),
+    pytest.param(
+        ImageLayout.TYX, None, 0, ImageDimensionality.TWO, True, (1, 2), id="TYX"
+    ),
+    pytest.param(
+        ImageLayout.TCYX, 1, 0, ImageDimensionality.TWO, True, (2, 3), id="TCYX"
+    ),
+    pytest.param(
+        ImageLayout.TZYX,
+        None,
+        0,
+        ImageDimensionality.THREE,
+        True,
+        (1, 2, 3),
+        id="TZYX",
+    ),
+    pytest.param(
+        ImageLayout.TCZYX,
+        1,
+        0,
+        ImageDimensionality.THREE,
+        True,
+        (2, 3, 4),
+        id="TCZYX",
+    ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("layout", "channel_axis", "time_axis", "dimensionality", "is_timelapse"),
+    (
+        "layout",
+        "channel_axis",
+        "time_axis",
+        "dimensionality",
+        "is_timelapse",
+        "spatial_axis_indices",
+    ),
     LAYOUT_DERIVED_PROPS,
 )
 def test_image_properties_derived_layout_props(
-    layout, channel_axis, time_axis, dimensionality, is_timelapse
+    layout,
+    channel_axis,
+    time_axis,
+    dimensionality,
+    is_timelapse,
+    spatial_axis_indices,
 ):
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     props = ImageProperties(
@@ -107,6 +161,23 @@ def test_image_properties_derived_layout_props(
     assert props.time_axis == time_axis
     assert props.dimensionality == dimensionality
     assert props.is_timelapse is is_timelapse
+    assert layout.spatial_axis_indices == spatial_axis_indices
+
+
+@pytest.mark.parametrize(
+    ("layout", "axis", "expected"),
+    [
+        pytest.param(ImageLayout.YX, "X", 1, id="YX-X"),
+        pytest.param(ImageLayout.CYX, "C", 0, id="CYX-C"),
+        pytest.param(ImageLayout.ZCYX, "Z", 0, id="ZCYX-Z"),
+        pytest.param(ImageLayout.TCZYX, "T", 0, id="TCZYX-T"),
+        pytest.param(ImageLayout.TYX, "Y", 1, id="TYX-Y"),
+        pytest.param(ImageLayout.ZYX, "T", None, id="ZYX-T-absent"),
+        pytest.param(ImageLayout.YX, "C", None, id="YX-C-absent"),
+    ],
+)
+def test_image_layout_axis_index(layout, axis, expected):
+    assert layout.axis_index(axis) == expected
 
 
 # Tests for ImageProperties class

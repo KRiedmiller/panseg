@@ -105,6 +105,9 @@ def image_cropping_task(
     Returns:
         PanSegImage: The cropped image.
     """
+    if image.is_multichannel:
+        raise ValueError("Cropping is not supported for multichannel images.")
+
     data = image.get_data()
 
     # Compute crop slices

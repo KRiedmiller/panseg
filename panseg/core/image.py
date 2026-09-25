@@ -142,6 +142,17 @@ class ImageLayout(Enum):
         return self.value.replace("T", "").replace("C", "")
 
     @property
+    def spatial_axis_indices(self) -> tuple[int, ...]:
+        """Indices of the spatial axes in the layout, in Z, Y, X order."""
+        return tuple(self.value.index(axis) for axis in self.spatial_axes)
+
+    def axis_index(self, axis: str) -> int | None:
+        """Index of the given axis in the layout, or None if absent."""
+        if axis in self.value:
+            return self.value.index(axis)
+        return None
+
+    @property
     def is_timelapse(self) -> bool:
         """True if the layout carries a time axis."""
         return "T" in self.value

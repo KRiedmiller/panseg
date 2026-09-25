@@ -623,3 +623,83 @@ def test_stack_level_io_tasks_accept_timelapses(timelapse_tzyx, tmp_path):
         scale_to_origin=False,
     )
     assert (tmp_path / "first_export.h5").exists()
+
+
+# --- per-stage pipeline behavior on timelapses ---
+# (spec: "Per-stage pipeline behavior"; falls out of the wrapper, no new
+# algorithm code)
+
+
+def test_crop_applies_one_spatial_region_to_every_timepoint(timelapse_tzyx):
+    image = make_image(timelapse_tzyx, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+    rectangle = np.array([[0, 2, 2], [0, 2, 9], [0, 9, 9], [0, 9, 2]])
+
+    result = image_cropping_task(image=image, rectangle=rectangle, crop_z=(1, 4))
+
+    assert result.is_timelapse
+    assert result.image_layout == ImageLayout.TZYX
+    assert result.shape == (4, 3, 7, 7)
+    # identical spatial crop at every timepoint: each output frame is the
+    # crop of the corresponding input frame, no per-timepoint ROI
+    for t, timepoint in enumerate(image.split_timepoints()):
+        np.testing.assert_array_equal(
+            result.get_data()[t], timepoint.get_data()[1:4, 2:9, 2:9]
+        )
+
+
+def test_crop_applies_one_spatial_region_to_every_timepoint_2d():
+    data = np.zeros((3, 12, 12), dtype="float32")
+    for t in range(3):
+        data[t] = np.arange(144, dtype="float32").reshape(12, 12) + t * 100.0
+    image = make_image(data, "TYX", t_spacing=TIMELAPSE_T_SPACING)
+    rectangle = np.array([[2, 2], [2, 9], [9, 9]])
+
+    result = image_cropping_task(image=image, rectangle=rectangle)
+
+    assert result.is_timelapse
+    assert result.image_layout == ImageLayout.TYX
+    assert result.shape == (3, 7, 7)
+    for t in range(3):
+        np.testing.assert_array_equal(result.get_data()[t], data[t][2:9, 2:9])
+
+
+def test_rescale_leaves_t_untouched_and_preserves_t_spacing():
+    data = np.zeros((3, 4, 16, 16), dtype="float32")
+    for t in range(3):
+        data[t] = t + 1  # per-timepoint constant: mixing frames would be visible
+    image = make_image(data, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+
+    result = image_rescale_to_voxel_size_task(
+        image=image, new_voxels_size=(2.0, 2.0, 2.0), new_unit="um"
+    )
+
+    assert result.is_timelapse
+    assert result.image_layout == ImageLayout.TZYX
+    # T untouched: same number of timepoints, each frame still its own constant
+    assert result.shape == (3, 2, 8, 8)
+    for t in range(3):
+        np.testing.assert_allclose(result.get_data()[t], t + 1)
+    assert result.properties.t_spacing == TIMELAPSE_T_SPACING
+
+
+def test_normalization_runs_per_timepoint():
+    ramp = np.arange(256, dtype="float32").reshape(4, 8, 8) / 255.0
+    data = np.zeros((2, 4, 8, 8), dtype="float32")
+    data[0] = ramp
+    data[1] = 2.0 * ramp + 5.0  # illumination drift at t1
+    image1 = make_image(data, "TZYX", t_spacing=TIMELAPSE_T_SPACING, name="drift")
+    image2 = make_image(np.zeros((4, 8, 8), dtype="float32"), "ZYX", name="zeros")
+
+    result = image_pair_operation_task(
+        image1=image1,
+        image2=image2,
+        operation="add",
+        normalize_input=True,
+        normalize_output=False,
+    )
+
+    assert result.is_timelapse
+    # the min-max normalizes each timepoint against its own range, so the
+    # drifted timepoint lands on the same pattern as the first
+    for t in range(2):
+        np.testing.assert_allclose(result.get_data()[t], ramp, atol=1e-6)

@@ -387,6 +387,27 @@ def _timelapse_labels_data() -> np.ndarray:
     return seg
 
 
+def _napari_image_layer(
+    data: np.ndarray,
+    name: str,
+    image_layout: str,
+    semantic_type: SemanticType,
+) -> Image:
+    """Image napari layer with panseg metadata; time spacing only for T layouts."""
+    voxel_size = (1.0, 1.0, 1.0)
+    metadata = {
+        "semantic_type": semantic_type,
+        "voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "original_voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "image_layout": image_layout,
+        "id": uuid4(),
+    }
+    if "T" in image_layout:
+        metadata["t_spacing"] = 10.0
+        metadata["t_unit"] = "s"
+    return Image(data, metadata=metadata, name=name)
+
+
 def _timelapse_labels_layer(data: np.ndarray, name: str, image_layout: str) -> Labels:
     voxel_size = (1.0, 1.0, 1.0)
     metadata = {
@@ -433,6 +454,61 @@ def napari_timelapse_prediction() -> Image:
         "id": uuid4(),
     }
     return Image(data, metadata=metadata, name="test_prediction_timelapse")
+
+
+@pytest.fixture
+def napari_raw_tyx() -> Image:
+    """RAW TYX image layer, shape (4, 16, 16)."""
+    data = np.random.default_rng(21).random((4, 16, 16)).astype("float32")
+    return _napari_image_layer(data, "test_image_tyx", "TYX", SemanticType.RAW)
+
+
+@pytest.fixture
+def napari_raw_cyx() -> Image:
+    """RAW CYX image layer, shape (2, 16, 16)."""
+    data = np.random.default_rng(22).random((2, 16, 16)).astype("float32")
+    return _napari_image_layer(data, "test_image_cyx", "CYX", SemanticType.RAW)
+
+
+@pytest.fixture
+def napari_raw_czyx() -> Image:
+    """RAW CZYX image layer, shape (2, 5, 16, 16)."""
+    data = np.random.default_rng(23).random((2, 5, 16, 16)).astype("float32")
+    return _napari_image_layer(data, "test_image_czyx", "CZYX", SemanticType.RAW)
+
+
+@pytest.fixture
+def napari_raw_tczyx() -> Image:
+    """RAW TCZYX image layer, shape (4, 2, 5, 16, 16)."""
+    data = np.random.default_rng(24).random((4, 2, 5, 16, 16)).astype("float32")
+    return _napari_image_layer(data, "test_image_tczyx", "TCZYX", SemanticType.RAW)
+
+
+@pytest.fixture
+def napari_prediction_tyx() -> Image:
+    """PREDICTION TYX image layer, shape (4, 16, 16)."""
+    data = np.random.default_rng(25).random((4, 16, 16)).astype("float32")
+    return _napari_image_layer(
+        data, "test_prediction_tyx", "TYX", SemanticType.PREDICTION
+    )
+
+
+@pytest.fixture
+def napari_prediction_czyx() -> Image:
+    """PREDICTION CZYX image layer, shape (2, 5, 16, 16)."""
+    data = np.random.default_rng(26).random((2, 5, 16, 16)).astype("float32")
+    return _napari_image_layer(
+        data, "test_prediction_czyx", "CZYX", SemanticType.PREDICTION
+    )
+
+
+@pytest.fixture
+def napari_prediction_tczyx() -> Image:
+    """PREDICTION TCZYX image layer, shape (4, 2, 5, 16, 16)."""
+    data = np.random.default_rng(27).random((4, 2, 5, 16, 16)).astype("float32")
+    return _napari_image_layer(
+        data, "test_prediction_tczyx", "TCZYX", SemanticType.PREDICTION
+    )
 
 
 # --- Synthetic OME-TIFF builders (time-dimension spec) ---

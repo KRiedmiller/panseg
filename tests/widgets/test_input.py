@@ -1,12 +1,21 @@
 from pathlib import Path
 
+import h5py
+import numpy as np
 import pytest
 
+from panseg.io.h5 import create_h5
+from panseg.io.tiff import create_tiff
+from panseg.io.voxelsize import VoxelSize
 from panseg.viewer_napari.widgets.input import (
     Docs_Container,
     Input_Tab,
     InputType,
     PathMode,
+)
+
+OME_EXAMPLES = (
+    Path(__file__).resolve().parent.parent / "resources" / "ome_tiff_examples"
 )
 
 
@@ -96,6 +105,56 @@ def test_set_voxel_size(input_tab, napari_raw, mocker):
 
     input_tab.widget_set_voxel_size(input_tab, (1.0, 1.0, 1.0))
     mocked_scheduler.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "file_name, axes",
+    [
+        ("time-series.ome.tif", "TYX"),
+        ("4D-series.ome.tif", "TZYX"),
+        ("multi-channel-4D-series.ome.tif", "TCZYX"),
+    ],
+)
+def test_update_stack_layout_ome_prefill_from_reader_axes(input_tab, file_name, axes):
+    input_tab.widget_open_file.path.value = OME_EXAMPLES / file_name
+    assert input_tab.widget_open_file.stack_layout.value == axes
+
+
+def test_update_stack_layout_ome_synthetic_prefill(input_tab, make_ome_timelapse):
+    input_tab.widget_open_file.path.value = make_ome_timelapse()
+    assert input_tab.widget_open_file.stack_layout.value == "TZYX"
+
+
+def test_update_stack_layout_non_ome_tiff_shape_heuristic(input_tab, tmp_path):
+    path = tmp_path / "out.tiff"
+    create_tiff(path, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    input_tab.widget_open_file.path.value = path
+    assert input_tab.widget_open_file.stack_layout.value == "ZYX"
+
+
+def test_update_stack_layout_non_ome_tiff_4d_no_small_dim_no_crash(input_tab, tmp_path):
+    path = tmp_path / "out.tiff"
+    create_tiff(
+        path, np.empty((10, 12, 16, 24), dtype="float32"), VoxelSize(), layout="ZCYX"
+    )
+    input_tab.widget_open_file.path.value = path
+    assert input_tab.widget_open_file.stack_layout.value == ""
+
+
+def test_update_stack_layout_h5_axis_order_prefill(input_tab, tmp_path):
+    path = tmp_path / "timelapse.h5"
+    create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    with h5py.File(path, "a") as f:
+        f["raw"].attrs["axis_order"] = "TZYX"
+    input_tab.widget_open_file.path.value = path
+    assert input_tab.widget_open_file.stack_layout.value == "TZYX"
+
+
+def test_update_stack_layout_h5_old_file_shape_heuristic(input_tab, tmp_path):
+    path = tmp_path / "old.h5"
+    create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    input_tab.widget_open_file.path.value = path
+    assert input_tab.widget_open_file.stack_layout.value == ""
 
 
 def test_on_path_changed(input_tab, mocker):

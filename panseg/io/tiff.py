@@ -46,6 +46,27 @@ def _read_imagej_meta(tiff) -> VoxelSize:
     return VoxelSize(voxels_size=(z, y, x), unit=voxel_size_unit)
 
 
+def _first_ome_pixels(tiff) -> Optional[ElementTree.Element]:
+    """
+    Returns the Pixels element of the first OME Image, or None when the file
+    is not an OME-TIFF or the OME-XML carries no Image or Pixels element.
+    """
+    if tiff.ome_metadata is None:
+        return None
+    tree = ElementTree.fromstring(tiff.ome_metadata)
+
+    image_element = [image for image in tree if image.tag.find("Image") != -1]
+    if not image_element:
+        return None
+
+    pixels_element = [
+        pixels for pixels in image_element[0] if pixels.tag.find("Pixels") != -1
+    ]
+    if not pixels_element:
+        return None
+    return pixels_element[0]
+
+
 def _read_ome_meta(tiff) -> VoxelSize:
     """
     Returns the voxels size and the voxel units
@@ -162,6 +183,121 @@ def load_tiff(path: Path) -> np.ndarray:
         np.ndarray: loaded data as numpy array
     """
     return tifffile.imread(path).squeeze()
+
+
+def read_ome_axes(path: Path) -> Optional[str]:
+    """
+    Return the axis string of the first OME-TIFF series, e.g. "TZYX".
+
+    Singleton axes are already dropped by the reader, so a single-timepoint
+    file reads as "YX" and a single-channel file without "C". Returns None
+    when the file is not an OME-TIFF.
+
+    Args:
+        path (Path): path to the tiff file
+
+    Returns:
+        str | None: axis string of the first OME series, or None
+    """
+    with tifffile.TiffFile(path) as tiff:
+        if tiff.ome_metadata is None or not tiff.series:
+            return None
+        return tiff.series[0].axes
+
+
+def read_ome_time_spacing(path: Path) -> tuple[Optional[float], str]:
+    """
+    Return the time spacing of an OME-TIFF file as (value, unit).
+
+    Pixels.TimeIncrement is used when present; otherwise the DeltaT of the
+    first plane of each timepoint, which must be uniform across timepoints
+    (non-uniform values warn and are treated as missing). The value is
+    expressed in the file's unit; conversion to the canonical unit seconds
+    happens at ImageProperties construction. Returns (None, "s") for
+    non-OME files and for files without timing metadata.
+
+    Args:
+        path (Path): path to the tiff file
+
+    Returns:
+        tuple: (time spacing value or None, unit string)
+    """
+    with tifffile.TiffFile(path) as tiff:
+        pixels = _first_ome_pixels(tiff)
+    if pixels is None:
+        return None, "s"
+
+    time_increment = pixels.get("TimeIncrement")
+    if time_increment is not None:
+        return float(time_increment), pixels.get("TimeIncrementUnit", "s")
+
+    # first plane (document order = plane raster order) of each timepoint
+    first_planes = {}
+    for plane in pixels:
+        if plane.tag.find("Plane") == -1:
+            continue
+        if plane.get("TheT", "0") not in first_planes:
+            first_planes[plane.get("TheT", "0")] = plane
+
+    if not first_planes:
+        return None, "s"
+
+    values = []
+    for plane in first_planes.values():
+        delta_t = plane.get("DeltaT")
+        if delta_t is None:
+            return None, "s"
+        values.append(float(delta_t))
+
+    unit = next(iter(first_planes.values())).get("DeltaTUnit", "s")
+
+    if not np.allclose(values, values[0]):
+        warnings.warn(
+            f"Non-uniform Plane.DeltaT across timepoints {values}, "
+            "treating the time spacing as missing"
+        )
+        return None, "s"
+
+    return values[0], unit
+
+
+def check_ome_single_file(path: Path) -> None:
+    """
+    Raise ValueError when the OME-TIFF describes a multi-file series.
+
+    A series is multi-file when the TiffData of the first Image carry more
+    than one distinct (UUID, FileName) pair, or a FileName that does not
+    match the opened file. The FileName attribute of the UUID child element
+    is optional: when absent it defaults to the opened file. Non-OME files
+    are ignored.
+
+    Args:
+        path (Path): path to the tiff file
+
+    Raises:
+        ValueError: if the file is part of a multi-file OME-TIFF series
+    """
+    with tifffile.TiffFile(path) as tiff:
+        pixels = _first_ome_pixels(tiff)
+    if pixels is None:
+        return
+
+    pairs = set()
+    for tiff_data in pixels:
+        if tiff_data.tag.find("TiffData") == -1:
+            continue
+        for uuid in tiff_data:
+            if uuid.tag.find("UUID") == -1:
+                continue
+            name = uuid.get("FileName") or path.name
+            pairs.add((uuid.text, name))
+
+    foreign = sorted({name for _, name in pairs if name.lower() != path.name.lower()})
+    if len(pairs) > 1 or foreign:
+        raise ValueError(
+            f"Multi-file OME-TIFF (UUID/FileName chain) is not supported, "
+            f"{path.name} references other file(s): {foreign}"
+        )
 
 
 def create_tiff(

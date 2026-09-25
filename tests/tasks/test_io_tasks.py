@@ -226,6 +226,73 @@ def test_label_io_round_trip(tmp_path, shape, layout, export_format):
     assert image.image_layout == imported_image.image_layout
 
 
+def test_import_image_task_t_layout(make_ome_timelapse):
+    path = make_ome_timelapse()
+    image = import_image_task(
+        input_path=path,
+        image_name="timelapse",
+        semantic_type="raw",
+        stack_layout="TZYX",
+    )
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (4, 5, 16, 16)
+    assert image.properties.t_spacing is None
+
+
+def test_import_image_task_tczyx_splits_channels(make_ome_timelapse):
+    path = make_ome_timelapse(axes="TCZYX")
+    images = import_image_task(
+        input_path=path,
+        image_name="timelapse",
+        semantic_type="raw",
+        stack_layout="TCZYX",
+    )
+    assert isinstance(images, list)
+    assert len(images) == 2
+    assert all(i.image_layout == ImageLayout.TZYX for i in images)
+
+
+def test_import_image_task_t_layout_rejects_mismatched_shape(make_ome_timelapse):
+    path = make_ome_timelapse()
+    result = import_image_task(
+        input_path=path,
+        image_name="timelapse",
+        semantic_type="raw",
+        stack_layout="ZYX",
+    )
+    assert isinstance(result, Task_message)
+    assert "incompatible with chosen layout" in result.message
+
+
+def test_import_image_task_m_slicing_t_first(make_ome_timelapse):
+    path = make_ome_timelapse(shape=(4, 5, 20, 60))
+    image = import_image_task(
+        input_path=path,
+        image_name="timelapse",
+        semantic_type="raw",
+        stack_layout="TZYX",
+        m_slicing="0:3,:, :, :50",
+    )
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (3, 5, 20, 50)
+
+
+def test_import_image_task_m_slicing_length_one_t_squeezes(make_ome_timelapse):
+    path = make_ome_timelapse()
+    image = import_image_task(
+        input_path=path,
+        image_name="timelapse",
+        semantic_type="raw",
+        stack_layout="TZYX",
+        m_slicing="0:1,:, :, :",
+    )
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.ZYX
+    assert image.properties.t_spacing is None
+
+
 def test_label_import_image_task_error_message(tmp_path):
     shape = (64, 64)
     layout = ImageLayout.YX

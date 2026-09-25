@@ -8,7 +8,15 @@ import numpy as np
 import pytest
 import tifffile
 
-from panseg.io.tiff import create_tiff, load_tiff, read_tiff_shape, read_tiff_voxel_size
+from panseg.io.tiff import (
+    check_ome_single_file,
+    create_tiff,
+    load_tiff,
+    read_ome_axes,
+    read_ome_time_spacing,
+    read_tiff_shape,
+    read_tiff_voxel_size,
+)
 from panseg.io.voxelsize import VoxelSize
 
 OME_DESCRIPTION_HEADER = (
@@ -438,6 +446,109 @@ def test_ome_timelapse_t1_squeezes(make_ome_timelapse):
     assert pixels.get("SizeT") == "1"
     assert series.axes == "YX"
     assert series.shape == (16, 16)
+
+
+@pytest.mark.parametrize("file_name, axes, shape", COMMITTED_ANCHORS)
+def test_read_ome_axes_committed_anchors(file_name, axes, shape):
+    assert read_ome_axes(OME_EXAMPLES / file_name) == axes
+
+
+def test_read_ome_axes_non_ome_tiff(tmp_path):
+    out = tmp_path / "out.tiff"
+    create_tiff(out, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    assert read_ome_axes(out) is None
+
+
+def test_read_ome_axes_multifile_uses_first_position(ome_timelapse_multifile):
+    first, second, _ = ome_timelapse_multifile
+    assert read_ome_axes(first) == "TZYX"
+    assert read_ome_axes(second) == "TZYX"
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "min"])
+def test_read_ome_time_spacing_time_increment(make_ome_timelapse, unit):
+    path = make_ome_timelapse(t_increment=500, t_increment_unit=unit)
+    assert read_ome_time_spacing(path) == (500.0, unit)
+
+
+def test_read_ome_time_spacing_uniform_plane_delta_t(make_ome_timelapse):
+    path = make_ome_timelapse(plane_delta_t=1000, plane_delta_t_unit="ms")
+    assert read_ome_time_spacing(path) == (1000.0, "ms")
+
+
+def test_read_ome_time_spacing_nonuniform_plane_delta_t(make_ome_timelapse):
+    path = make_ome_timelapse(nonuniform_plane_delta_t=True)
+    with pytest.warns(UserWarning, match="DeltaT"):
+        assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_absent(make_ome_timelapse):
+    path = make_ome_timelapse()
+    assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_non_ome_tiff(tmp_path):
+    out = tmp_path / "out.tiff"
+    create_tiff(out, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    assert read_ome_time_spacing(out) == (None, "s")
+
+
+_OME_NS = "http://www.openmicroscopy.org/Schemas/OME/2016-06"
+
+
+def _set_tiff_data_uuid(path, uuid_text, file_name=None):
+    """Append a UUID child element to the first TiffData of the OME-XML.
+
+    Mirrors the OME 2016-06 schema: UUID is a child of TiffData and FileName
+    is an optional attribute of it, defaulting to the opened file.
+    """
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    image = next(e for e in root if e.tag.endswith("Image"))
+    pixels = next(e for e in image if e.tag.endswith("Pixels"))
+    tiff_data = next(e for e in pixels if e.tag.endswith("TiffData"))
+    uuid_el = ElementTree.SubElement(tiff_data, f"{{{_OME_NS}}}UUID")
+    uuid_el.text = uuid_text
+    if file_name is not None:
+        uuid_el.set("FileName", file_name)
+    ElementTree.register_namespace("", _OME_NS)
+    xml = ElementTree.tostring(root, encoding="unicode")
+    with tifffile.TiffFile(path, mode="r+") as tiff:
+        tiff.pages[0].tags["ImageDescription"].overwrite(xml.encode("ascii"))
+
+
+def test_check_ome_single_file_rejects_multifile(ome_timelapse_multifile):
+    first, second, _ = ome_timelapse_multifile
+    with pytest.raises(ValueError, match="Multi-file OME-TIFF"):
+        check_ome_single_file(first)
+
+
+def test_check_ome_single_file_allows_single_file(make_ome_timelapse):
+    check_ome_single_file(make_ome_timelapse())
+
+
+def test_check_ome_single_file_allows_self_referencing_uuid(
+    make_ome_timelapse,
+):
+    path = make_ome_timelapse()
+    _set_tiff_data_uuid(
+        path, "urn:uuid:11111111-1111-4111-8111-111111111111", path.name
+    )
+    check_ome_single_file(path)
+
+
+def test_check_ome_single_file_allows_uuid_without_file_name(
+    make_ome_timelapse,
+):
+    path = make_ome_timelapse()
+    _set_tiff_data_uuid(path, "urn:uuid:11111111-1111-4111-8111-111111111111")
+    check_ome_single_file(path)
+
+
+def test_check_ome_single_file_ignores_non_ome(tmp_path):
+    out = tmp_path / "out.tiff"
+    create_tiff(out, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    check_ome_single_file(out)
 
 
 def test_ome_timelapse_multifile_chain(ome_timelapse_multifile):

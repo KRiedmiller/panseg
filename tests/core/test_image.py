@@ -694,6 +694,164 @@ def test_import_image_ZCYX_warning(mocker, test_h5_dir):
         )
 
 
+# OME-TIFF import with time (ticket 13): the committed resliced anchors carry no
+# timing metadata, so they import with t_spacing unknown.
+OME_EXAMPLES = (
+    Path(__file__).resolve().parent.parent / "resources" / "ome_tiff_examples"
+)
+
+
+@pytest.mark.parametrize(
+    "file_name, layout, shape",
+    [
+        ("time-series.ome.tif", ImageLayout.TYX, (4, 32, 32)),
+        ("4D-series.ome.tif", ImageLayout.TZYX, (4, 2, 32, 32)),
+    ],
+)
+def test_import_image_ome_anchor_single(file_name, layout, shape):
+    image = import_image(path=OME_EXAMPLES / file_name, stack_layout=layout.name)
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == layout
+    assert image.shape == shape
+    assert image.is_timelapse
+    assert image.properties.t_spacing is None
+
+
+def test_import_image_ome_anchor_multichannel():
+    images = import_image(
+        path=OME_EXAMPLES / "multi-channel-4D-series.ome.tif", stack_layout="TCZYX"
+    )
+    assert isinstance(images, list)
+    assert len(images) == 3
+    for ch, image in enumerate(images):
+        assert image.image_layout == ImageLayout.TZYX
+        assert image.shape == (4, 2, 32, 32)
+        assert image.properties.t_spacing is None
+        assert image.name == f"image_{ch}"
+
+
+@pytest.mark.parametrize(
+    "unit, expected_t_spacing",
+    [
+        ("s", 500.0),
+        ("ms", 0.5),
+        ("min", 30000.0),
+    ],
+)
+def test_import_image_ome_time_increment_units(
+    make_ome_timelapse, unit, expected_t_spacing
+):
+    path = make_ome_timelapse(t_increment=500, t_increment_unit=unit)
+    image = import_image(path=path, stack_layout="TZYX")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.properties.t_spacing == expected_t_spacing
+    assert image.properties.t_unit == "s"
+
+
+def test_import_image_ome_uniform_plane_delta_t(make_ome_timelapse):
+    path = make_ome_timelapse(plane_delta_t=1000, plane_delta_t_unit="ms")
+    image = import_image(path=path, stack_layout="TZYX")
+    assert image.properties.t_spacing == 1.0
+
+
+def test_import_image_ome_nonuniform_plane_delta_t_warns_unknown(make_ome_timelapse):
+    path = make_ome_timelapse(nonuniform_plane_delta_t=True)
+    with pytest.warns(UserWarning, match="DeltaT"):
+        image = import_image(path=path, stack_layout="TZYX")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.properties.t_spacing is None
+
+
+def test_import_image_ome_absent_timing_metadata_unknown(make_ome_timelapse):
+    path = make_ome_timelapse()
+    image = import_image(path=path, stack_layout="TZYX")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.properties.t_spacing is None
+
+
+def test_import_image_ome_multichannel_keeps_t_spacing(make_ome_timelapse):
+    path = make_ome_timelapse(axes="TCZYX", t_increment=500, t_increment_unit="ms")
+    images = import_image(path=path, stack_layout="TCZYX")
+    assert isinstance(images, list)
+    assert len(images) == 2
+    for image in images:
+        assert image.image_layout == ImageLayout.TZYX
+        assert image.properties.t_spacing == 0.5
+
+
+def test_import_image_ome_t1_imports_squeezed(make_ome_timelapse):
+    path = make_ome_timelapse(axes="TYX", shape=(1, 16, 16))
+    image = import_image(path=path, stack_layout="YX")
+    assert image.image_layout == ImageLayout.YX
+    assert image.shape == (16, 16)
+    assert not image.is_timelapse
+
+
+def test_import_image_ome_multifile_rejected(ome_timelapse_multifile):
+    first, second, _ = ome_timelapse_multifile
+    with pytest.raises(ValueError, match="Multi-file OME-TIFF"):
+        import_image(path=first, stack_layout="TZYX")
+
+
+def test_import_image_tzyx_single(make_ome_timelapse):
+    path = make_ome_timelapse()
+    image = import_image(path=path, stack_layout="TZYX")
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (4, 5, 16, 16)
+
+
+def test_import_image_tyx_single(make_ome_timelapse):
+    path = make_ome_timelapse(axes="TYX")
+    image = import_image(path=path, stack_layout="TYX")
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TYX
+    assert image.shape == (4, 16, 16)
+
+
+def test_import_image_tczyx_splits_channels(make_ome_timelapse):
+    path = make_ome_timelapse(axes="TCZYX")
+    images = import_image(path=path, stack_layout="TCZYX")
+    assert isinstance(images, list)
+    assert len(images) == 2
+    for ch, image in enumerate(images):
+        assert image.image_layout == ImageLayout.TZYX
+        assert image.shape == (4, 5, 16, 16)
+        assert image.name == f"image_{ch}"
+
+
+def test_import_image_tcyx_splits_channels(make_ome_timelapse):
+    path = make_ome_timelapse(axes="TCYX")
+    images = import_image(path=path, stack_layout="TCYX")
+    assert isinstance(images, list)
+    assert len(images) == 2
+    for image in images:
+        assert image.image_layout == ImageLayout.TYX
+        assert image.shape == (4, 16, 16)
+
+
+def test_import_image_tzyx_slicing_t_first(make_ome_timelapse):
+    path = make_ome_timelapse(shape=(4, 5, 20, 60))
+    image = import_image(path=path, stack_layout="TZYX", m_slicing="0:3,:, :, :50")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (3, 5, 20, 50)
+
+
+def test_import_image_tzyx_spatial_slicing(make_ome_timelapse):
+    path = make_ome_timelapse(shape=(4, 5, 20, 60))
+    image = import_image(path=path, stack_layout="TZYX", m_slicing=":,1:3,10:,10:20")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (4, 2, 10, 10)
+
+
+def test_import_image_tzyx_length_one_t_slice_squeezes(make_ome_timelapse):
+    path = make_ome_timelapse()
+    image = import_image(path=path, stack_layout="TZYX", m_slicing="0:1,:, :, :")
+    assert image.image_layout == ImageLayout.ZYX
+    assert image.shape == (5, 16, 16)
+    assert image.properties.t_spacing is None
+
+
 def test_split_image_CZYX():
     data = np.random.rand(3, 9, 10, 11)
     voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 1.0), unit="um")

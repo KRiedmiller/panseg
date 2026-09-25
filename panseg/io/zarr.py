@@ -117,6 +117,23 @@ def read_zarr_shape(path: Path, key: str | None = None) -> tuple[int, ...]:
     return data.shape
 
 
+def read_zarr_axis_order(path: Path, key: str | None = None) -> str | None:
+    """Read the axis_order attribute of a dataset written by PanSeg, e.g. "TZYX".
+
+    Args:
+        path (Path): The path to the Zarr file.
+        key (str | None, optional): The internal key of the desired dataset. Defaults to None.
+
+    Returns:
+        str | None: The axis order string, or None when the attribute is
+        absent (older files).
+    """
+    _validate_zarr_file(path)
+    data = _get_zarr_dataset(path, key)
+    axis_order = data.attrs.get("axis_order", None)
+    return str(axis_order) if axis_order is not None else None
+
+
 def read_zarr_voxel_size(path: Path, key: str | None) -> VoxelSize:
     """Read the voxel size of a dataset in a Zarr file.
 

@@ -106,6 +106,23 @@ def read_h5_shape(path: Path, key: Optional[str] = None) -> tuple[int, ...]:
     return shape
 
 
+def read_h5_axis_order(path: Path, key: Optional[str] = None) -> Optional[str]:
+    """
+    Read the axis_order attribute of a dataset written by PanSeg, e.g. "TZYX".
+
+    Args:
+        path (Path): Path to the h5file
+        key (Optional[str], optional): Optional, key of the dataset in the h5 file. Defaults to None.
+
+    Returns:
+        str | None: axis order string, or None when the attribute is absent
+            (older files)
+    """
+    with h5py.File(path, "r") as f:
+        data = _get_h5_dataset(f, key)
+        return data.attrs.get("axis_order", None)
+
+
 def read_h5_voxel_size(
     path: Path,
     key: Optional[str] = None,

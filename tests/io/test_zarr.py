@@ -10,6 +10,7 @@ from panseg.io.zarr import (
     del_zarr_key,
     list_zarr_keys,
     load_zarr,
+    read_zarr_axis_order,
     read_zarr_shape,
     read_zarr_voxel_size,
     rename_zarr_key,
@@ -119,6 +120,20 @@ def test_read_zarr_voxel_size_prefers_element_size(tmp_path):
     assert read_zarr_voxel_size(tmp_path / "out.zarr", key="data") == VoxelSize(
         voxels_size=(1.0, 1.0, 1.0)
     )
+
+
+def test_read_zarr_axis_order_absent(tmp_path):
+    group = zarr.open_group(store=str(tmp_path / "out.zarr"), mode="w")
+    _fill(group, "raw", 0.0)
+    assert read_zarr_axis_order(tmp_path / "out.zarr", key="raw") is None
+
+
+def test_read_zarr_axis_order_present(tmp_path):
+    group = zarr.open_group(store=str(tmp_path / "out.zarr"), mode="w")
+    _fill(group, "raw", 0.0)
+    group["raw"].attrs["axis_order"] = "TZYX"
+    assert read_zarr_axis_order(tmp_path / "out.zarr", key="raw") == "TZYX"
+    assert read_zarr_axis_order(tmp_path / "out.zarr") == "TZYX"
 
 
 def test_auto_key_single_dataset(tmp_path):

@@ -12,11 +12,11 @@ from qtpy import QtGui
 from panseg import logger
 from panseg.core.image import PanSegImage, SemanticType
 from panseg.io import H5_EXTENSIONS, ZARR_EXTENSIONS
-from panseg.io.h5 import list_h5_keys, read_h5_shape
-from panseg.io.io import shape_to_stack_layout
-from panseg.io.pil import PIL_EXTENSIONS, read_pil_shape
-from panseg.io.tiff import TIFF_EXTENSIONS, read_tiff_shape
-from panseg.io.zarr import list_zarr_keys, read_zarr_shape
+from panseg.io.h5 import list_h5_keys
+from panseg.io.io import guess_stack_layout
+from panseg.io.pil import PIL_EXTENSIONS
+from panseg.io.tiff import TIFF_EXTENSIONS
+from panseg.io.zarr import list_zarr_keys
 from panseg.tasks.dataprocessing_tasks import set_voxel_size_task
 from panseg.tasks.io_tasks import import_image_task
 from panseg.viewer_napari import log
@@ -138,7 +138,7 @@ class Input_Tab:
         stack_layout={
             "value": "",
             "label": "Stack layout",
-            "tooltip": "c for channel, xyz for dimensions, e.g.:\nzyxc will be reshaped to [C][Z]YX.\nInvert an axis by adding `-` infront of the letter.",
+            "tooltip": "t for time, c for channel, xyz for dimensions, e.g.:\nzyxc will be reshaped to [C][Z]YX, tzyx to [T][Z]YX.\nInvert an axis by adding `-` infront of the letter.",
             "widget_type": "LineEdit",
         },
     )
@@ -299,21 +299,17 @@ class Input_Tab:
 
         if ext in H5_EXTENSIONS:
             key = self.dataset_key.value
-            shape = read_h5_shape(path=path, key=key)
-            self.widget_open_file.stack_layout.value = shape_to_stack_layout(shape)
+            self.widget_open_file.stack_layout.value = guess_stack_layout(path, key)
 
         elif ext in ZARR_EXTENSIONS:
             key = self.dataset_key.value
-            shape = read_zarr_shape(path=path, key=key)
-            self.widget_open_file.stack_layout.value = shape_to_stack_layout(shape)
+            self.widget_open_file.stack_layout.value = guess_stack_layout(path, key)
 
         elif ext in TIFF_EXTENSIONS:
-            shape = read_tiff_shape(path)
-            self.widget_open_file.stack_layout.value = shape_to_stack_layout(shape)
+            self.widget_open_file.stack_layout.value = guess_stack_layout(path)
 
         elif ext in PIL_EXTENSIONS:
-            shape = read_pil_shape(path)
-            self.widget_open_file.stack_layout.value = shape_to_stack_layout(shape)
+            self.widget_open_file.stack_layout.value = guess_stack_layout(path)
 
     def _on_done(self):
         logger.debug("_on_done called!")

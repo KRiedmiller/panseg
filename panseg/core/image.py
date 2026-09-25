@@ -15,7 +15,12 @@ import panseg.functionals.dataprocessing as dp
 from panseg.io.h5 import H5_EXTENSIONS, create_h5
 from panseg.io.io import smart_load_with_vs
 from panseg.io.mesh import create_mesh
-from panseg.io.tiff import create_tiff
+from panseg.io.tiff import (
+    TIFF_EXTENSIONS,
+    check_ome_single_file,
+    create_tiff,
+    read_ome_time_spacing,
+)
 from panseg.io.voxelsize import VoxelSize
 from panseg.io.zarr import create_zarr
 
@@ -785,15 +790,31 @@ def import_image(
         image_name (str): Name of the image (a unique name to identify the image)
         semantic_type (str): Semantic type of the image, should be raw, segmentation,
             prediction or label
-        stack_layout (str): Layout of the image, should be YX, CYX, ZYX, CZYX or ZCYX
+        stack_layout (str): Layout of the image, should be YX, CYX, ZYX, CZYX or ZCYX,
+            or a timelapse layout TYX, TCYX, TZYX or TCZYX (time import is
+            OME-TIFF only)
         m_slicing (str): Slicing to apply to the image, should be a string
-            with the format [start:stop, ...] for each dimension.
+            with the format [start:stop, ...] for each dimension in layout
+            order (T first for timelapse layouts). A length-1 T slice
+            squeezes the result to the corresponding no-T layout.
     """
     global last_warning
     stack_layout = stack_layout.upper()
+    is_tiff = path.suffix.lower() in TIFF_EXTENSIONS
+    if is_tiff:
+        # Multi-file OME-TIFF (UUID/FileName chain) is rejected at import.
+        check_ome_single_file(path)
+
     data, voxel_size = smart_load_with_vs(path, key)
     if voxel_size is None:
         voxel_size = VoxelSize()
+
+    # The time spacing is extracted from OME-TIFF metadata only; other
+    # formats stay T-unaware and import with it unknown.
+    t_spacing: float | None = None
+    t_unit = "s"
+    if is_tiff:
+        t_spacing, t_unit = read_ome_time_spacing(path)
 
     if not len(stack_layout.replace("-", "")) == len(data.shape):
         raise ValueError(
@@ -806,7 +827,12 @@ def import_image(
     images = []
     image_layout = ImageLayout(stack_layout)
 
-    if image_layout in [ImageLayout.ZYX, ImageLayout.YX]:
+    if image_layout in [
+        ImageLayout.ZYX,
+        ImageLayout.YX,
+        ImageLayout.TZYX,
+        ImageLayout.TYX,
+    ]:
         if m_slicing is not None:
             data = dp.image_crop(data, m_slicing)
 
@@ -817,6 +843,8 @@ def import_image(
             image_layout=image_layout,
             original_voxel_size=voxel_size,
             source_file_name=path.stem,
+            t_spacing=t_spacing if image_layout.is_timelapse else None,
+            t_unit=t_unit if image_layout.is_timelapse else "s",
         )
         if image_properties.image_type == ImageType.IMAGE:
             data = dp.normalize_01(data)
@@ -862,6 +890,34 @@ def import_image(
                 source_file_name=path.stem,
             )
             images.append(PanSegImage(data=data[ch], properties=image_properties))
+
+    elif image_layout is ImageLayout.TCYX:
+        for ch in range(data.shape[1]):
+            image_properties = ImageProperties(
+                name=image_name + f"_{ch}",
+                semantic_type=SemanticType(semantic_type),
+                voxel_size=voxel_size,
+                image_layout=ImageLayout.TYX,
+                original_voxel_size=voxel_size,
+                source_file_name=path.stem,
+                t_spacing=t_spacing,
+                t_unit=t_unit,
+            )
+            images.append(PanSegImage(data=data[:, ch], properties=image_properties))
+
+    elif image_layout is ImageLayout.TCZYX:
+        for ch in range(data.shape[1]):
+            image_properties = ImageProperties(
+                name=image_name + f"_{ch}",
+                semantic_type=SemanticType(semantic_type),
+                voxel_size=voxel_size,
+                image_layout=ImageLayout.TZYX,
+                original_voxel_size=voxel_size,
+                source_file_name=path.stem,
+                t_spacing=t_spacing,
+                t_unit=t_unit,
+            )
+            images.append(PanSegImage(data=data[:, ch], properties=image_properties))
 
     elif image_layout is ImageLayout.ZCYX:
         logger.warning("##### WARNING: Depricated image layout ZCYX used #####")

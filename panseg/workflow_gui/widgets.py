@@ -474,6 +474,17 @@ class Task_node:
 
             return Container(widgets=[w])
 
+        elif self.func == "set_t_spacing_task":
+            w = FloatSpinBox(
+                label=label,
+                value=self.parameters["t_spacing"],
+            )
+            self.changing_fields[self.id] = lambda: {
+                "parameters": {"t_spacing": w.value}
+            }
+
+            return Container(widgets=[w])
+
         elif self.func == "image_rescale_to_shape_task":
             x, y, z = (
                 SpinBox(value=self.parameters["new_shape"][0]),

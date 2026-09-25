@@ -16,11 +16,12 @@ letters `t`, `c`, `z`, `y`, `x` that match your file, so a 3D timelapse
 prefills as `TZYX`.
 
 OME-TIFF import also reads the time spacing from the timing metadata
-(`TimeIncrement` or `Plane.DeltaT`) when the file has any. Most timelapses do
+(`TimeIncrement` or `Plane.DeltaT`) if the file carries it. Most timelapses do
 not carry it, so the spacing is usually unknown after import. Select the
 timelapse layer in **Details** to set it with the **Time spacing [s]** field,
-which only appears for timelapse layers. See the [Timelapse chapter](../timelapse/index.md)
-for what the spacing is used for and what frame-by-frame processing means.
+which only appears for timelapse layers. The [Timelapse
+chapter](../timelapse/index.md) explains what the spacing does and how
+frame-by-frame processing works.
 
 Multichannel timelapses (TCYX, TCZYX) import as one single-channel timelapse
 layer per channel, the same as multichannel stills.

@@ -16,9 +16,9 @@ when the time spacing is known. H5 and zarr exports carry the layout
 (`axis_order` attribute) and the spacing when it is known, so a re-import
 recovers the timelapse and its spacing.
 
-A 3D timelapse segmentation additionally exports one mesh file per timepoint,
-named `{name}_t000.{ext}`, `{name}_t001.{ext}`, and so on, with a zero-based
-index. Empty timepoints get their (empty) mesh file too, so the file count
+For a 3D timelapse segmentation, the mesh export writes one file per
+timepoint, named `{name}_t000.{ext}`, `{name}_t001.{ext}`, and so on, with a
+zero-based index. Empty timepoints get their (empty) mesh file too, so the file count
 always matches the timepoint count. 2D timelapse segmentations (TYX) get no
 mesh files; mesh export is 3D only. See the [Timelapse
 chapter](../timelapse/index.md).

@@ -1,8 +1,8 @@
 # Timelapse
 
-PanSeg imports, processes, and exports timelapses. Processing is frame-by-frame:
-each timepoint goes through the pipeline on its own with the same parameters,
-and no step looks at neighbouring timepoints. There is no tracking, and label
+PanSeg imports, processes, and exports timelapses. Processing is frame-by-frame.
+Each timepoint goes through the pipeline on its own with the same parameters,
+and no step looks at neighboring timepoints. There is no tracking, and label
 numbers do not follow cells over time.
 
 ## Supported layouts and formats
@@ -10,12 +10,13 @@ numbers do not follow cells over time.
 The timelapse layouts are TYX (2D), TZYX (3D), and their multichannel versions
 TCYX and TCZYX.
 
-Import supports OME-TIFF, PanSeg h5, and PanSeg zarr. For OME-TIFF, the input
-tab prefills the stack layout from the file's OME-XML, and it reads the time
-spacing from the timing metadata (`TimeIncrement` or `Plane.DeltaT`) when the
-file has any. Files without timing metadata import with an unknown time
-spacing. That is a normal state, not an error; you can set the spacing after
-import, see below.
+Import supports OME-TIFF, PanSeg h5, and PanSeg zarr. Files in other formats
+import without a time axis, and h5/zarr files PanSeg did not export do not
+carry one either. For OME-TIFF, the input tab prefills the stack layout from
+the file's OME-XML, and it reads the time spacing from the timing metadata
+(`TimeIncrement` or `Plane.DeltaT`) if the file carries it. Files without
+timing metadata import with an unknown time spacing, a normal state rather
+than an error. The section below shows how to set the spacing after import.
 
 Multichannel timelapses split into single-channel timelapses at import, one
 layer per channel, the same as multichannel stills.
@@ -27,15 +28,15 @@ carry the layout and the spacing with it.
 ## How a timelapse is processed
 
 Every task in the pipeline (smoothing, cropping, rescaling, prediction,
-segmentation) runs once per timepoint, and the results are stacked back into a
-timelapse. In practice:
+segmentation) runs once per timepoint, and PanSeg stacks the results back into
+a timelapse. In practice:
 
 - A crop you draw once applies to every timepoint. There is no per-timepoint
   crop and no drift correction.
 - Min-max normalization happens per timepoint, so a brightness drift across
   the run does not flatten the later timepoints.
 - A 3D timelapse (TZYX) runs on the 3D models and algorithms, a 2D timelapse
-  (TYX) on the 2D ones. Existing models are reused as-is.
+  (TYX) on the 2D ones. PanSeg reuses the existing models as-is.
 
 The main consequence of frame-by-frame processing is that label IDs are
 independent per timepoint. Label 5 at timepoint 0 and label 5 at timepoint 1
@@ -55,8 +56,8 @@ consecutive timepoints in seconds into **Time spacing [s]** and click
 **Set Time Spacing**. An empty field marks the spacing as unknown again. The
 info box shows the current value, or `None` when unknown.
 
-The spacing is used for the t axis scale in napari and for the
-`TimeIncrement` metadata written on tiff export.
+PanSeg uses the spacing for the t axis scale in napari and for the
+`TimeIncrement` metadata on tiff export.
 
 ## Mesh export
 
@@ -71,14 +72,15 @@ export is 3D only.
 - **No tracking.** Segment tracking over time and merge/split event detection
   are the planned follow-up built on this version.
 - **No spacetime algorithms.** No watershed, multicut, or other step uses
-  neighbouring timepoints.
-- **No training on timelapse data.** Existing models are reused per timepoint.
-- **In-memory only.** The full timelapse is held in memory, there is no
+  neighboring timepoints.
+- **No training on timelapse data.** PanSeg reuses existing models per
+  timepoint.
+- **In-memory only.** The full timelapse is held in memory. There is no
   chunked or out-of-core handling. For very long runs, the `m_slicing`
   parameter of `import_image_task` in a workflow yaml restricts the imported
-  range (comma-separated ranges along the layout, T first, e.g.
-  `0:3, :, :, :` imports the first three timepoints of a TZYX file). The
-  input tab does not expose this field.
+  range. The value is one range per layout axis, T first, so `0:3, :, :, :`
+  imports the first three timepoints of a TZYX file. The input tab does not
+  expose this field.
 - **One file per timelapse.** Multi-file OME-TIFF (UUID/FileName chain) is
   rejected at import with an error, and there is no one-file-per-frame import.
 - **A failed timepoint aborts the run.** There is no skipping or filling of

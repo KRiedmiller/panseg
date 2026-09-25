@@ -1,12 +1,16 @@
 # pylint: disable=missing-docstring,import-outside-toplevel
 
+import itertools
 import shutil
 from pathlib import Path
+from typing import Sequence
 from uuid import uuid4
+from xml.etree import ElementTree
 
 import numpy as np
 import pytest
 import skimage.transform as skt
+import tifffile
 import torch
 import yaml
 from napari.layers import Image, Labels, Shapes
@@ -266,3 +270,250 @@ def zarr_file_3d():
 @pytest.fixture
 def h5_file():
     return TEST_FILES / "sample_ovule.h5"
+
+
+# --- Timelapse fixtures (time-dimension spec) ---
+#
+# Synthetic raw timelapses on one shape skeleton: T=4, C=2, Z=5, Y=X=16.
+# Tests build PanSegImage inline from these arrays; known-vs-unknown
+# t_spacing are the two property dicts below, not separate fixtures.
+
+TIMELAPSE_PROPS_KNOWN_T_SPACING = {"t_spacing": 10.0, "t_unit": "s"}
+TIMELAPSE_PROPS_UNKNOWN_T_SPACING = {"t_spacing": None}
+
+
+def _timelapse_raw(shape: tuple[int, ...], seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    return rng.random(shape).astype("float32")
+
+
+@pytest.fixture
+def timelapse_tyx() -> np.ndarray:
+    """Raw TYX float32 timelapse, shape (4, 16, 16)."""
+    return _timelapse_raw((4, 16, 16), seed=11)
+
+
+@pytest.fixture
+def timelapse_tcyx() -> np.ndarray:
+    """Raw TCYX float32 timelapse, shape (4, 2, 16, 16)."""
+    return _timelapse_raw((4, 2, 16, 16), seed=12)
+
+
+@pytest.fixture
+def timelapse_tzyx() -> np.ndarray:
+    """Raw TZYX float32 timelapse, shape (4, 5, 16, 16)."""
+    return _timelapse_raw((4, 5, 16, 16), seed=13)
+
+
+@pytest.fixture
+def timelapse_tczyx() -> np.ndarray:
+    """Raw TCZYX float32 timelapse, shape (4, 2, 5, 16, 16)."""
+    return _timelapse_raw((4, 2, 5, 16, 16), seed=14)
+
+
+def _timelapse_segmentation() -> np.ndarray:
+    """uint16 TZYX segmentation, shape (4, 5, 16, 16).
+
+    Label IDs are independent across timepoints by construction: timepoint
+    t carries the disjoint ID range 3t+1..3t+3, so no label ID ever appears
+    in two timepoints.
+    """
+    t, z, y, x = 4, 5, 16, 16
+    blob = 3
+    rng = np.random.default_rng(15)
+    seg = np.zeros((t, z, y, x), dtype="uint16")
+    for t_index in range(t):
+        for j in range(3):
+            z0 = int(rng.integers(0, z - blob + 1))
+            y0 = int(rng.integers(0, y - blob + 1))
+            x0 = int(rng.integers(0, x - blob + 1))
+            seg[t_index, z0 : z0 + blob, y0 : y0 + blob, x0 : x0 + blob] = (
+                t_index * 3 + j + 1
+            )
+    return seg
+
+
+@pytest.fixture
+def timelapse_segmentation() -> np.ndarray:
+    """uint16 TZYX segmentation timelapse; label IDs are independent across timepoints."""
+    return _timelapse_segmentation()
+
+
+# --- Synthetic OME-TIFF builders (time-dimension spec) ---
+#
+# The committed anchors under tests/resources/ome_tiff_examples/ carry no
+# timing metadata, so every timing variant is synthesized into tmp_path at
+# test time.
+
+_OME_XML_NS = "http://www.openmicroscopy.org/Schemas/OME/2016-06"
+
+# The shared shape skeleton (T, C, Z, Y, X); each layout is the projection of
+# the canonical order onto its present axes.
+TIMELAPSE_SHAPE_SKELETON = (4, 2, 5, 16, 16)
+
+_TIMELAPSE_OME_SHAPES: dict[str, tuple[int, ...]] = {
+    axes: tuple(n for ax, n in zip("TCZYX", TIMELAPSE_SHAPE_SKELETON) if ax in axes)
+    for axes in ("TYX", "TCYX", "TZYX", "TCZYX")
+}
+
+
+def _write_ome_timelapse(
+    path: Path,
+    axes: str,
+    shape: tuple[int, ...],
+    seed: int,
+    t_increment: float | None = None,
+    t_increment_unit: str = "s",
+    plane_delta_t: Sequence[int | float] | None = None,
+    plane_delta_t_unit: str = "ms",
+) -> Path:
+    rng = np.random.default_rng(seed)
+    data = (rng.random(shape) * 4096).astype("uint16")
+    metadata: dict = {"axes": axes}
+    if t_increment is not None:
+        metadata["TimeIncrement"] = t_increment
+        metadata["TimeIncrementUnit"] = t_increment_unit
+    if plane_delta_t is not None:
+        metadata["Plane"] = {
+            "DeltaT": plane_delta_t,
+            "DeltaTUnit": [plane_delta_t_unit] * len(plane_delta_t),
+        }
+    tifffile.imwrite(path, data, ome=True, photometric="minisblack", metadata=metadata)
+    return path
+
+
+def _plane_delta_t_sequence(
+    axes: str, shape: tuple[int, ...], per_timepoint: Sequence[int | float]
+) -> list[int | float]:
+    """Per-plane DeltaT values in plane raster order (last page axis fastest)."""
+    page_shape = shape[:-2]
+    t_axis = axes.index("T")
+    return [
+        per_timepoint[coords[t_axis]]
+        for coords in itertools.product(*[range(n) for n in page_shape])
+    ]
+
+
+@pytest.fixture
+def make_ome_timelapse(tmp_path):
+    """Factory for synthetic OME-TIFF timelapses written into tmp_path.
+
+    Defaults to the TZYX slice of the shared shape skeleton. ``t_increment``
+    writes the Pixels TimeIncrement/TimeIncrementUnit attributes;
+    ``plane_delta_t`` writes a uniform per-plane DeltaT and
+    ``nonuniform_plane_delta_t`` a per-timepoint varying DeltaT (1000 ms,
+    2000 ms, ...). With none of them the file carries no timing metadata.
+    Returns the written file path.
+    """
+    counter = 0
+
+    def _make(
+        axes: str = "TZYX",
+        shape: tuple[int, ...] | None = None,
+        t_increment: float | None = None,
+        t_increment_unit: str = "s",
+        plane_delta_t: float | None = None,
+        nonuniform_plane_delta_t: bool = False,
+        plane_delta_t_unit: str = "ms",
+    ) -> Path:
+        nonlocal counter
+        counter += 1
+        if shape is None:
+            shape = _TIMELAPSE_OME_SHAPES[axes]
+        assert len(shape) == len(axes)
+        if nonuniform_plane_delta_t:
+            per_timepoint = [1000 * (i + 1) for i in range(shape[axes.index("T")])]
+            sequence = _plane_delta_t_sequence(axes, shape, per_timepoint)
+        elif plane_delta_t is not None:
+            sequence = [plane_delta_t] * int(np.prod(shape[:-2]))
+        else:
+            sequence = None
+        return _write_ome_timelapse(
+            tmp_path / f"synthetic_ome_{counter}.ome.tif",
+            axes,
+            shape,
+            seed=1000 + counter,
+            t_increment=t_increment,
+            t_increment_unit=t_increment_unit,
+            plane_delta_t=sequence,
+            plane_delta_t_unit=plane_delta_t_unit,
+        )
+
+    return _make
+
+
+def _ome_root(path: Path) -> ElementTree.Element:
+    with tifffile.TiffFile(path) as tiff:
+        return ElementTree.fromstring(tiff.ome_metadata)
+
+
+def _save_ome_description(path: Path, root: ElementTree.Element) -> None:
+    ElementTree.register_namespace("", _OME_XML_NS)
+    xml = '<?xml version="1.0" encoding="UTF-8"?>' + ElementTree.tostring(
+        root, encoding="unicode"
+    )
+    with tifffile.TiffFile(path, mode="r+") as tiff:
+        tiff.pages[0].tags["ImageDescription"].overwrite(xml.encode("ascii"))
+
+
+def _ome_multifile_chain(tmp_path: Path) -> tuple[Path, Path, np.ndarray]:
+    """Two-file OME-TIFF UUID/FileName chain.
+
+    A 4-timepoint TZYX timelapse (T=4, Z=2, Y=X=16) is split 2+2 across two
+    files. The first file's OME-XML is patched to describe the full
+    timelapse: its TiffData entry gains a UUID child naming the first file,
+    and a second TiffData entry (FirstT=2) is appended whose UUID child
+    names the second file. The second file stays a plain 2-timepoint
+    OME-TIFF.
+    """
+    t, z, y, x = 4, 2, 16, 16
+    axes = "TZYX"
+    rng = np.random.default_rng(42)
+    data = (rng.random((t, z, y, x)) * 4096).astype("uint16")
+    first = tmp_path / "multifile_first.ome.tif"
+    second = tmp_path / "multifile_second.ome.tif"
+    tifffile.imwrite(
+        first,
+        data[: t // 2],
+        ome=True,
+        photometric="minisblack",
+        metadata={"axes": axes},
+    )
+    tifffile.imwrite(
+        second,
+        data[t // 2 :],
+        ome=True,
+        photometric="minisblack",
+        metadata={"axes": axes},
+    )
+    uuid_first = _ome_root(first).get("UUID")
+    uuid_second = _ome_root(second).get("UUID")
+
+    root_first = _ome_root(first)
+    image = next(e for e in root_first if e.tag.endswith("Image"))
+    pixels = next(e for e in image if e.tag.endswith("Pixels"))
+    pixels.set("SizeT", str(t))
+    own_data = next(e for e in pixels if e.tag.endswith("TiffData"))
+    own_uuid = ElementTree.SubElement(own_data, f"{{{_OME_XML_NS}}}UUID")
+    own_uuid.set("FileName", first.name)
+    own_uuid.text = uuid_first
+    other_data = ElementTree.Element(f"{{{_OME_XML_NS}}}TiffData")
+    other_data.set("FirstT", str(t // 2))
+    other_data.set("FirstZ", "0")
+    other_data.set("IFD", "0")
+    other_data.set("PlaneCount", str(int(np.prod((t // 2, z)))))
+    other_uuid = ElementTree.SubElement(other_data, f"{{{_OME_XML_NS}}}UUID")
+    other_uuid.set("FileName", second.name)
+    other_uuid.text = uuid_second
+    pixels.append(other_data)
+    _save_ome_description(first, root_first)
+    return first, second, data
+
+
+@pytest.fixture
+def ome_timelapse_multifile(tmp_path):
+    """Two-file OME-TIFF UUID/FileName chain (see ``_ome_multifile_chain``).
+
+    Returns (first_path, second_path, full_timelapse_data).
+    """
+    return _ome_multifile_chain(tmp_path)

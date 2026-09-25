@@ -17,6 +17,10 @@ from panseg.core.image import (
     stack_sort,
 )
 from panseg.io.voxelsize import VoxelSize
+from tests.conftest import (
+    TIMELAPSE_PROPS_KNOWN_T_SPACING,
+    TIMELAPSE_PROPS_UNKNOWN_T_SPACING,
+)
 
 
 # Tests for Enum classes
@@ -1306,3 +1310,68 @@ def test_stack_sort_2dc_invX():
     assert n_data.shape == (2, 3, 4)
     assert n_voxel_size.voxels_size == (3, 4, 5)
     assert np.all(n_data[:, :, ::-1] == data)
+
+
+# Shared timelapse fixtures: one raw float32 array per T layout on the
+# documented shape skeleton, plus a uint16 segmentation whose label IDs are
+# independent across timepoints by construction.
+TIMELAPSE_RAW_FIXTURES = [
+    pytest.param("timelapse_tyx", ImageLayout.TYX, (4, 16, 16), id="TYX"),
+    pytest.param("timelapse_tcyx", ImageLayout.TCYX, (4, 2, 16, 16), id="TCYX"),
+    pytest.param("timelapse_tzyx", ImageLayout.TZYX, (4, 5, 16, 16), id="TZYX"),
+    pytest.param("timelapse_tczyx", ImageLayout.TCZYX, (4, 2, 5, 16, 16), id="TCZYX"),
+]
+
+
+@pytest.mark.parametrize("fixture_name, layout, shape", TIMELAPSE_RAW_FIXTURES)
+def test_timelapse_raw_fixture(request, fixture_name, layout, shape):
+    data = request.getfixturevalue(fixture_name)
+    assert data.shape == shape
+    assert data.dtype == np.float32
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    for t_props, expected_t_spacing in (
+        (TIMELAPSE_PROPS_KNOWN_T_SPACING, 10.0),
+        (TIMELAPSE_PROPS_UNKNOWN_T_SPACING, None),
+    ):
+        props = ImageProperties(
+            name=fixture_name,
+            semantic_type=SemanticType.RAW,
+            voxel_size=voxel_size,
+            image_layout=layout,
+            original_voxel_size=voxel_size,
+            **t_props,
+        )
+        image = PanSegImage(data, props)
+        assert image.image_layout == layout
+        assert image.is_timelapse
+        assert image.shape == shape
+        assert image.properties.t_spacing == expected_t_spacing
+
+
+def test_timelapse_segmentation_fixture(timelapse_segmentation):
+    seg = timelapse_segmentation
+    assert seg.shape == (4, 5, 16, 16)
+    assert seg.dtype == np.uint16
+    # Label IDs are independent across timepoints: no ID shared by two t.
+    label_sets = [set(np.unique(seg[t]).tolist()) - {0} for t in range(seg.shape[0])]
+    assert all(label_sets)
+    for i in range(len(label_sets)):
+        for j in range(i + 1, len(label_sets)):
+            assert not label_sets[i] & label_sets[j]
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    for t_props, expected_t_spacing in (
+        (TIMELAPSE_PROPS_KNOWN_T_SPACING, 10.0),
+        (TIMELAPSE_PROPS_UNKNOWN_T_SPACING, None),
+    ):
+        props = ImageProperties(
+            name="timelapse_segmentation",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=voxel_size,
+            image_layout=ImageLayout.TZYX,
+            original_voxel_size=voxel_size,
+            **t_props,
+        )
+        image = PanSegImage(seg, props)
+        assert image.image_layout == ImageLayout.TZYX
+        assert image.image_type == ImageType.LABEL
+        assert image.properties.t_spacing == expected_t_spacing

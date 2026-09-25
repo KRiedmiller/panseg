@@ -2,6 +2,7 @@ import logging
 import struct
 import warnings
 from pathlib import Path
+from xml.etree import ElementTree
 
 import numpy as np
 import pytest
@@ -307,3 +308,161 @@ def test_read_tiff_voxel_size_resource_rgb_3d():
     path = Path(__file__).resolve().parent.parent / "resources" / "rgb_3D.tif"
     with pytest.warns(UserWarning, match="No metadata found"):
         assert read_tiff_voxel_size(path) == VoxelSize()
+
+
+# Committed resliced anchors: the three T-bearing OME-TIFFs resliced offline
+# to T=4, C=3, Z=2, Y=X=32 (see ome_tiff_examples/reslice_anchors.py). Tests
+# load the committed files and never reslice at runtime.
+OME_EXAMPLES = (
+    Path(__file__).resolve().parent.parent / "resources" / "ome_tiff_examples"
+)
+
+COMMITTED_ANCHORS = [
+    pytest.param("time-series.ome.tif", "TYX", (4, 32, 32), id="TYX"),
+    pytest.param("4D-series.ome.tif", "TZYX", (4, 2, 32, 32), id="TZYX"),
+    pytest.param(
+        "multi-channel-4D-series.ome.tif", "TCZYX", (4, 3, 2, 32, 32), id="TCZYX"
+    ),
+]
+
+
+@pytest.mark.parametrize("file_name, axes, shape", COMMITTED_ANCHORS)
+def test_committed_anchor_axes_and_shape(file_name, axes, shape):
+    path = OME_EXAMPLES / file_name
+    assert path.exists()
+    with tifffile.TiffFile(path) as tiff:
+        series = tiff.series[0]
+        assert series.axes == axes
+        assert series.shape == shape
+        data = tiff.asarray()
+    assert data.shape == shape
+    assert data.dtype == np.int8
+
+
+@pytest.mark.parametrize("file_name, axes, shape", COMMITTED_ANCHORS)
+def test_committed_anchor_no_timing_metadata(file_name, axes, shape):
+    path = OME_EXAMPLES / file_name
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert "TimeIncrement" not in pixels.attrib
+    assert "TimeIncrementUnit" not in pixels.attrib
+    assert not [e for e in pixels if e.tag.endswith("Plane")]
+
+
+def test_committed_anchor_license_note():
+    note = (OME_EXAMPLES / "LICENSE.md").read_text()
+    assert "CC-BY-4.0" in note
+    assert "The Open Microscopy Environment" in note
+
+
+def test_committed_anchor_reslice_script_documented():
+    script = OME_EXAMPLES / "reslice_anchors.py"
+    assert script.exists()
+    text = script.read_text()
+    assert "ome_tiff_examples.tar.xz" in text
+    assert "time-series.ome.tif" in text
+    assert "4D-series.ome.tif" in text
+    assert "multi-channel-4D-series.ome.tif" in text
+
+
+# Synthetic OME-TIFF builders: every timing variant, written into tmp_path at
+# test time (none of the committed anchors carries timing metadata).
+def _ome_pixels(root):
+    image = next(e for e in root if e.tag.endswith("Image"))
+    return next(e for e in image if e.tag.endswith("Pixels"))
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "min"])
+def test_ome_timelapse_time_increment(make_ome_timelapse, unit):
+    path = make_ome_timelapse(t_increment=500, t_increment_unit=unit)
+    with tifffile.TiffFile(path) as tiff:
+        series = tiff.series[0]
+        assert series.axes == "TZYX"
+        assert series.shape == (4, 5, 16, 16)
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert pixels.get("TimeIncrement") == "500"
+    assert pixels.get("TimeIncrementUnit") == unit
+    assert not [e for e in pixels if e.tag.endswith("Plane")]
+
+
+def test_ome_timelapse_uniform_plane_delta_t(make_ome_timelapse):
+    path = make_ome_timelapse(plane_delta_t=1000, plane_delta_t_unit="ms")
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert pixels.get("TimeIncrement") is None
+    planes = [e for e in pixels if e.tag.endswith("Plane")]
+    assert len(planes) == 4 * 5
+    assert all(p.get("DeltaT") == "1000" for p in planes)
+    assert all(p.get("DeltaTUnit") == "ms" for p in planes)
+
+
+def test_ome_timelapse_nonuniform_plane_delta_t(make_ome_timelapse):
+    path = make_ome_timelapse(nonuniform_plane_delta_t=True)
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert pixels.get("TimeIncrement") is None
+    per_timepoint = {}
+    for p in pixels:
+        if p.tag.endswith("Plane"):
+            per_timepoint.setdefault(p.get("TheT"), set()).add(p.get("DeltaT"))
+    assert len(per_timepoint) == 4
+    assert {min(values) for values in per_timepoint.values()} == {
+        "1000",
+        "2000",
+        "3000",
+        "4000",
+    }
+
+
+def test_ome_timelapse_no_timing_metadata(make_ome_timelapse):
+    path = make_ome_timelapse()
+    with tifffile.TiffFile(path) as tiff:
+        series = tiff.series[0]
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    assert series.axes == "TZYX"
+    pixels = _ome_pixels(root)
+    assert pixels.get("TimeIncrement") is None
+    assert not [e for e in pixels if e.tag.endswith("Plane")]
+
+
+def test_ome_timelapse_t1_squeezes(make_ome_timelapse):
+    path = make_ome_timelapse(axes="TYX", shape=(1, 16, 16))
+    with tifffile.TiffFile(path) as tiff:
+        series = tiff.series[0]
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert pixels.get("SizeT") == "1"
+    assert series.axes == "YX"
+    assert series.shape == (16, 16)
+
+
+def test_ome_timelapse_multifile_chain(ome_timelapse_multifile):
+    first, second, data = ome_timelapse_multifile
+    assert first.exists()
+    assert second.exists()
+    with tifffile.TiffFile(first) as tiff:
+        series = tiff.series[0]
+        root_first = ElementTree.fromstring(tiff.ome_metadata)
+        loaded = tiff.asarray()
+    with tifffile.TiffFile(second) as tiff:
+        root_second = ElementTree.fromstring(tiff.ome_metadata)
+    pixels_first = _ome_pixels(root_first)
+    assert pixels_first.get("SizeT") == "4"
+    tiff_data = [e for e in pixels_first if e.tag.endswith("TiffData")]
+    assert len(tiff_data) == 2
+    uuid_pairs = {
+        (u.text, u.get("FileName"))
+        for td in tiff_data
+        for u in td
+        if u.tag.endswith("UUID")
+    }
+    assert len(uuid_pairs) == 2
+    assert {name for _, name in uuid_pairs} == {first.name, second.name}
+    assert _ome_pixels(root_second).get("SizeT") == "2"
+    assert series.axes == "TZYX"
+    assert series.shape == data.shape == (4, 2, 16, 16)
+    np.testing.assert_array_equal(loaded, data)

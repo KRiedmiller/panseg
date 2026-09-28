@@ -76,11 +76,10 @@ export is 3D only.
 - **No training on timelapse data.** PanSeg reuses existing models per
   timepoint.
 - **In-memory only.** The full timelapse is held in memory. There is no
-  chunked or out-of-core handling. For very long runs, the `m_slicing`
-  parameter of `import_image_task` in a workflow yaml restricts the imported
-  range. The value is one range per layout axis, T first, so `0:3, :, :, :`
-  imports the first three timepoints of a TZYX file. The input tab does not
-  expose this field.
+  chunked or out-of-core handling. For very long runs, an inline slice on
+  the `stack_layout` parameter of `import_image_task` in a workflow yaml
+  restricts the imported range, e.g. `TZYX[:3,:,:,:]` imports the first
+  three timepoints of a TZYX file.
 - **One file per timelapse.** Multi-file OME-TIFF (UUID/FileName chain) is
   rejected at import with an error, and there is no one-file-per-frame import.
 - **A failed timepoint aborts the run.** There is no skipping or filling of

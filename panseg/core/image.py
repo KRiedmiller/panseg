@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from enum import Enum
 from pathlib import Path
@@ -839,6 +840,22 @@ def restack_timepoints(
     return PanSegImage(data, new_props)
 
 
+def _layout_tokens(stack_layout: str) -> list[tuple[str, bool]]:
+    """Tokenize a stack layout into (letter, inverted) pairs, in written order.
+
+    A '-' inverts the letter that follows it.
+    """
+    tokens: list[tuple[str, bool]] = []
+    invert_next = False
+    for char in stack_layout:
+        if char == "-":
+            invert_next = True
+            continue
+        tokens.append((char, invert_next))
+        invert_next = False
+    return tokens
+
+
 def stack_sort(stack_layout: str, data, voxel_size):
     """Sort the stack layout, data, and voxelsize
 
@@ -854,20 +871,12 @@ def stack_sort(stack_layout: str, data, voxel_size):
         ("X", 4),
     ]
 
+    tokens = _layout_tokens(stack_layout)
+    # ZCXY -> [2,1,4,3]
+    invert = [inverted for _, inverted in tokens]
     sort_idxs = []
     sort_idxs_wo_channel = []
-    # ZCXY -> [2,1,4,3]
-    invert = []
-    invert_next = False
-    for c in stack_layout:
-        if c == "-":
-            invert_next = True
-            continue
-        if invert_next:
-            invert.append(True)
-            invert_next = False
-        else:
-            invert.append(False)
+    for c, _ in tokens:
         sort_idxs.extend([n for c_sorted, n in sort_order if c == c_sorted])
         sort_idxs_wo_channel.extend(
             [n for c_sorted, n in sort_order if c == c_sorted and c not in "CT"]
@@ -891,13 +900,110 @@ def stack_sort(stack_layout: str, data, voxel_size):
     return stack_layout, data, voxel_size
 
 
+# A stack layout optionally carries a slice in brackets after the letters,
+# e.g. "txyz[:3,:,:]": the letters order the axes, the slice truncates the
+# data before the axes are inverted and reordered.
+_STACK_LAYOUT_SPEC_PATTERN = re.compile(
+    r"(?P<axes>[-A-Za-z]*)(?:\[(?P<slicing>[^\[\]]*)\])?"
+)
+
+
+def split_stack_layout(stack_layout: str) -> tuple[str, str | None]:
+    """Split a stack layout spec into its layout letters and an optional slice.
+
+    The slice, when present, is what sits between the brackets without the
+    brackets themselves, e.g. "txyz[:3,:,:]" -> ("txyz", ":3,:,:").
+
+    Raises:
+        ValueError: if the spec is not letters optionally followed by a
+            bracketed slice, or carries letters outside t, c, z, y, x.
+    """
+    match = _STACK_LAYOUT_SPEC_PATTERN.fullmatch(stack_layout.strip())
+    if match is None:
+        raise ValueError(
+            f"Stack layout {stack_layout!r} is not understood: expected layout "
+            "letters (t, c, z, y, x, each optionally prefixed with '-') with an "
+            "optional slice in brackets, e.g. 'txyz[:3,:,:]'."
+        )
+    axes, slicing = match.group("axes"), match.group("slicing")
+    unknown = sorted(
+        {char for char in axes if char != "-" and char.upper() not in "TCZYX"}
+    )
+    if unknown:
+        raise ValueError(
+            f"Stack layout {stack_layout!r} is not understood: unknown axis "
+            f"letter(s) {''.join(unknown)!r}, expected t, c, z, y or x, each "
+            "optionally prefixed with '-'."
+        )
+    return axes, slicing or None
+
+
+def _parse_slicing(slicing: str) -> list[slice | int]:
+    """Parse a slicing string like "0:3, :, :, :50" into numpy index entries."""
+    entries: list[slice | int] = []
+    for part in slicing.split(","):
+        part = part.strip()
+        try:
+            if ":" in part:
+                fields = [field.strip() for field in part.split(":")]
+                entries.append(
+                    slice(*(int(field) if field else None for field in fields))
+                )
+            elif part:
+                entries.append(int(part))
+            else:
+                raise ValueError("empty entry")
+        except (TypeError, ValueError) as err:
+            raise ValueError(
+                f"Slicing {slicing!r} is not understood: expected one entry per "
+                f"axis like '0:3', ':', '10:20:2' or an integer, got {part!r}."
+            ) from err
+    return entries
+
+
+def _drop_layout_axes(stack_layout: str, drop: set[int]) -> str:
+    """Remove the axes at the given positions from a stack layout string."""
+    return "".join(
+        f"{'-' if inverted else ''}{char}"
+        for i, (char, inverted) in enumerate(_layout_tokens(stack_layout))
+        if i not in drop
+    )
+
+
+def crop_to_stack_layout(
+    data: np.ndarray, stack_layout: str, slicing: str
+) -> tuple[str, np.ndarray]:
+    """Crop data along the axes of stack_layout, in the order they are written.
+
+    The entries follow the user-supplied layout, before any axis inversion or
+    reordering: entry i applies to axis i of stack_layout. There may be fewer
+    entries than axes, the remaining axes are then left untouched. An integer
+    entry selects a single index and drops its axis: the letter, and its '-'
+    inversion marker, leaves the layout too.
+
+    Returns:
+        The (possibly shortened) stack layout and the cropped data.
+    """
+    entries = _parse_slicing(slicing)
+    n_axes = len(_layout_tokens(stack_layout))
+    if len(entries) > n_axes:
+        raise ValueError(
+            f"Slicing {slicing!r} has {len(entries)} entries but the stack "
+            f"layout {stack_layout!r} has {n_axes} axes."
+        )
+    dropped = {i for i, entry in enumerate(entries) if isinstance(entry, int)}
+    data = data[tuple(entries)]
+    if dropped:
+        stack_layout = _drop_layout_axes(stack_layout, dropped)
+    return stack_layout, data
+
+
 def import_image(
     path: Path,
     key: str | None = None,
     image_name: str = "image",
     semantic_type: str = "raw",
     stack_layout: str = "YX",
-    m_slicing: str | None = None,
 ) -> PanSegImage | list[PanSegImage]:
     """
     Open an image file and create a PanSegImage object.
@@ -910,14 +1016,15 @@ def import_image(
             prediction or label
         stack_layout (str): Layout of the image, should be YX, CYX, ZYX, CZYX or ZCYX,
             or a timelapse layout TYX, TCYX, TZYX or TCZYX (time import is
-            OME-TIFF only)
-        m_slicing (str): Slicing to apply to the image, should be a string
-            with the format [start:stop, ...] for each dimension in layout
-            order (T first for timelapse layouts). A length-1 T slice
-            squeezes the result to the corresponding no-T layout.
+            OME-TIFF only). A slice can follow the letters, e.g.
+            "txyz[:3,:,:]", to truncate the data before the axes are
+            reordered (see crop_to_stack_layout): the entries follow the
+            layout as written, an integer entry drops its axis, and a
+            length-1 axis (other than Y and X) squeezes the result to the
+            shorter layout.
     """
     global last_warning
-    stack_layout = stack_layout.upper()
+    stack_layout, slicing = split_stack_layout(stack_layout.upper())
     is_tiff = path.suffix.lower() in TIFF_EXTENSIONS
     if is_tiff:
         # Multi-file OME-TIFF (UUID/FileName chain) is rejected at import.
@@ -944,6 +1051,10 @@ def import_image(
         )
 
     original_data_shape = data.shape
+    # The slicing follows the user-supplied layout order, so it happens before
+    # stack_sort reorders (and inverts) the axes to the canonical T-C-Z-Y-X.
+    if slicing is not None:
+        stack_layout, data = crop_to_stack_layout(data, stack_layout, slicing)
     stack_layout, data, voxel_size = stack_sort(stack_layout, data, voxel_size)
 
     images = []
@@ -955,9 +1066,6 @@ def import_image(
         ImageLayout.TZYX,
         ImageLayout.TYX,
     ]:
-        if m_slicing is not None:
-            data = dp.image_crop(data, m_slicing)
-
         image_properties = ImageProperties(
             name=image_name,
             semantic_type=SemanticType(semantic_type),

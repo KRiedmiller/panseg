@@ -85,6 +85,36 @@ def test_stack_layout_tooltip_mentions_t(input_tab):
     assert "t for time" in tooltip
 
 
+def test_stack_layout_tooltip_mentions_slice(input_tab):
+    tooltip = input_tab.widget_open_file.stack_layout.tooltip
+    assert "Truncate the data before importing" in tooltip
+
+
+def test_open_file_passes_stack_layout_with_slice(input_tab, mocker, tmp_path):
+    """The stack layout field hands the inline slice to the import task
+    untouched: parsing and cropping happen in import_image."""
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.input.schedule_task",
+        autospec=True,
+    )
+    path = tmp_path / "timelapse.h5"
+    create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    input_tab.path_changed_once = True
+    layout = "tzyx[:3,:,:,:]"
+    kwargs = {
+        "path_mode": True,
+        "path": path,
+        "stack_layout": layout,
+        "layer_type": InputType.RAW.value,
+        "new_layer_name": "layer",
+    }
+    input_tab.widget_open_file(**kwargs)
+
+    task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
+    assert task_kwargs["stack_layout"] == layout
+    assert task_kwargs["input_path"] == path
+
+
 def test_open_file_widget_path_handling(input_tab):
     assert input_tab.widget_open_file.path.mode.value == "r"
     assert input_tab.widget_open_file.path.label == "File path"

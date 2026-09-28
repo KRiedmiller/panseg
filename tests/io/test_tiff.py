@@ -382,8 +382,8 @@ def _ome_pixels(root):
 
 
 @pytest.mark.parametrize("unit", ["s", "ms", "min"])
-def test_ome_time_increment(make_ome_time, unit):
-    path = make_ome_time(t_increment=500, t_increment_unit=unit)
+def test_ome_time_increment(make_ome_timeseries, unit):
+    path = make_ome_timeseries(t_increment=500, t_increment_unit=unit)
     with tifffile.TiffFile(path) as tiff:
         series = tiff.series[0]
         assert series.axes == "TZYX"

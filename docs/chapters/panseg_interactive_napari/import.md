@@ -26,3 +26,20 @@ frame-by-frame processing works.
 Multichannel timelapses (TCYX, TCZYX) import as one single-channel timelapse
 layer per channel, the same as multichannel stills.
 
+## Truncate on import
+
+The **Stack layout** field also takes a slice after the letters to restrict
+what gets imported: `TZYX[:3,:,:,:]` keeps the first three timepoints,
+`ZYX[:10,:,:]` the first ten z slices. An integer entry takes a single index
+and drops that axis, so `TZYX[0,:,:,:]` imports one timepoint as a plain ZYX
+image.
+
+The entries follow the layout as you write it, before PanSeg reorders the
+axes to the canonical T-C-Z-Y-X order, so the first entry always belongs to
+the first letter. There may be fewer entries than letters, the axes you leave
+out stay whole: `TXYZ[:3]` keeps the first three timepoints and leaves x, y
+and z untouched.
+
+A workflow yaml does the same through the `stack_layout` parameter of
+`import_image_task`, with the slice written inline.
+

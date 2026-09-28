@@ -23,7 +23,6 @@ def import_image_task(
     stack_layout: str,
     image_name: str | None = None,
     key: str | None = None,
-    m_slicing: str | None = None,
 ) -> PanSegImage | list[PanSegImage] | Task_message:
     """
     Task wrapper creating a PanSegImage object from an image file.
@@ -32,11 +31,10 @@ def import_image_task(
         input_path (Path): path to the image file
         semantic_type (str): semantic type of the image (raw, segmentation, prediction)
         stack_layout (str): stack layout of the image (YX, CYX, ZYX, CZYX or ZCYX,
-            or a timelapse layout TYX, TCYX, TZYX or TCZYX)
+            or a timelapse layout TYX, TCYX, TZYX or TCZYX), optionally followed
+            by a slice to truncate before importing, e.g. "TZYX[:3,:,:,:]"
         image_name (str): name of the image, if None the name will be the same as the file name
         key (str | None): key for the image (used only for h5 and zarr formats)
-        m_slicing (str | None): slicing string applied along the layout axes,
-            T first for timelapse layouts
     """
 
     if image_name is None:
@@ -48,7 +46,6 @@ def import_image_task(
         image_name=image_name,
         semantic_type=semantic_type,
         stack_layout=stack_layout,
-        m_slicing=m_slicing,
     )
 
 

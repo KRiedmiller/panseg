@@ -33,7 +33,6 @@ list_tasks:
   parameters:
     image_name: timelapse
     key: null
-    m_slicing: null
     semantic_type: raw
     stack_layout: TZYX
   skip: false

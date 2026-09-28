@@ -74,7 +74,6 @@ def test_image_io_round_trip_multichannel(tmp_path, shape, layout, export_format
         image_name="test_import",
         semantic_type="raw",
         stack_layout=layout.name,
-        m_slicing=None,
     )
     assert isinstance(imported_image, list)
 
@@ -139,7 +138,6 @@ def test_image_io_round_trip(tmp_path, shape, layout, export_format):
         image_name="tesi_import",
         semantic_type="raw",
         stack_layout=layout.name,
-        m_slicing=None,
     )
     assert isinstance(imported_image, PanSegImage)
 
@@ -211,7 +209,6 @@ def test_label_io_round_trip(tmp_path, shape, layout, export_format):
         image_name="test_import",
         semantic_type="segmentation",
         stack_layout=layout.name,
-        m_slicing=None,
     )
     assert isinstance(imported_image, PanSegImage)
 
@@ -266,28 +263,52 @@ def test_import_image_task_t_layout_rejects_mismatched_shape(make_ome_timelapse)
     assert "incompatible with chosen layout" in result.message
 
 
-def test_import_image_task_m_slicing_t_first(make_ome_timelapse):
+def test_import_image_task_inline_slice_t_first(make_ome_timelapse):
     path = make_ome_timelapse(shape=(4, 5, 20, 60))
     image = import_image_task(
         input_path=path,
         image_name="timelapse",
         semantic_type="raw",
-        stack_layout="TZYX",
-        m_slicing="0:3,:, :, :50",
+        stack_layout="TZYX[:3,:,:,:50]",
     )
     assert isinstance(image, PanSegImage)
     assert image.image_layout == ImageLayout.TZYX
     assert image.shape == (3, 5, 20, 50)
 
 
-def test_import_image_task_m_slicing_length_one_t_squeezes(make_ome_timelapse):
+def test_import_image_task_length_one_t_slice_squeezes(make_ome_timelapse):
     path = make_ome_timelapse()
     image = import_image_task(
         input_path=path,
         image_name="timelapse",
         semantic_type="raw",
-        stack_layout="TZYX",
-        m_slicing="0:1,:, :, :",
+        stack_layout="TZYX[:1,:,:,:]",
+    )
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.ZYX
+    assert image.properties.t_spacing is None
+
+
+def test_import_image_task_inline_slicing(make_ome_timelapse):
+    path = make_ome_timelapse(shape=(4, 5, 20, 60))
+    image = import_image_task(
+        input_path=path,
+        image_name="timelapse",
+        semantic_type="raw",
+        stack_layout="tzyx[:3,:,:,:50]",
+    )
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (3, 5, 20, 50)
+
+
+def test_import_image_task_inline_slice_integer_drops_time(make_ome_timelapse):
+    path = make_ome_timelapse()
+    image = import_image_task(
+        input_path=path,
+        image_name="timelapse",
+        semantic_type="raw",
+        stack_layout="TZYX[0,:,:,:]",
     )
     assert isinstance(image, PanSegImage)
     assert image.image_layout == ImageLayout.ZYX
@@ -327,7 +348,6 @@ def test_label_import_image_task_error_message(tmp_path):
         image_name="tesi_import",
         semantic_type="segmentation",
         stack_layout="CYX",
-        m_slicing=None,
     )
     assert isinstance(result, Task_message)
     assert "Data to import has shape (64, 64)" in result.message
@@ -510,8 +530,7 @@ def test_io_slicing_trip(tmp_path):
         key=key,
         image_name="tesi_import",
         semantic_type="segmentation",
-        stack_layout="zyx",
-        m_slicing="5:10,:, :50",
+        stack_layout="zyx[5:10,:,:50]",
     )
     assert isinstance(imported_image, PanSegImage)
 

@@ -13,8 +13,10 @@ from panseg.core.image import (
     ImageType,
     PanSegImage,
     SemanticType,
+    crop_to_stack_layout,
     import_image,
     save_image,
+    split_stack_layout,
     stack_sort,
 )
 from panseg.io.h5 import create_h5, read_h5_axis_order, read_h5_time_spacing
@@ -939,24 +941,102 @@ def test_import_image_tcyx_splits_channels(make_ome_timelapse):
 
 def test_import_image_tzyx_slicing_t_first(make_ome_timelapse):
     path = make_ome_timelapse(shape=(4, 5, 20, 60))
-    image = import_image(path=path, stack_layout="TZYX", m_slicing="0:3,:, :, :50")
+    image = import_image(path=path, stack_layout="TZYX[:3,:,:,:50]")
     assert image.image_layout == ImageLayout.TZYX
     assert image.shape == (3, 5, 20, 50)
 
 
 def test_import_image_tzyx_spatial_slicing(make_ome_timelapse):
     path = make_ome_timelapse(shape=(4, 5, 20, 60))
-    image = import_image(path=path, stack_layout="TZYX", m_slicing=":,1:3,10:,10:20")
+    image = import_image(path=path, stack_layout="TZYX[:,1:3,10:,10:20]")
     assert image.image_layout == ImageLayout.TZYX
     assert image.shape == (4, 2, 10, 10)
 
 
 def test_import_image_tzyx_length_one_t_slice_squeezes(make_ome_timelapse):
     path = make_ome_timelapse()
-    image = import_image(path=path, stack_layout="TZYX", m_slicing="0:1,:, :, :")
+    image = import_image(path=path, stack_layout="TZYX[:1,:,:,:]")
     assert image.image_layout == ImageLayout.ZYX
     assert image.shape == (5, 16, 16)
     assert image.properties.t_spacing is None
+
+
+def test_split_stack_layout_letters_and_slice():
+    axes, slicing = split_stack_layout("txyz[:3,:,:]")
+    assert axes == "txyz"
+    assert slicing is not None
+    assert slicing.split(",") == [":3", ":", ":"]
+
+    assert split_stack_layout("zyx") == ("zyx", None)
+    assert split_stack_layout("-TZYX[0]") == ("-TZYX", "0")
+
+
+def test_split_stack_layout_rejects_malformed_spec():
+    with pytest.raises(ValueError, match="is not understood"):
+        split_stack_layout("t zyx")
+    with pytest.raises(ValueError, match="is not understood"):
+        split_stack_layout("tzyx[:2,:, :")
+
+
+def test_split_stack_layout_rejects_unknown_axis_letter():
+    with pytest.raises(ValueError, match="unknown axis letter"):
+        split_stack_layout("ZBA")
+
+
+def test_import_image_inline_slice_uses_user_layout_order(tmp_path):
+    """Entry 0 belongs to the first letter of the layout as written (z here),
+    not to the first letter of the canonical TZYX it is sorted into."""
+    path = tmp_path / "non_canonical_timelapse.h5"
+    create_h5(path, np.zeros((6, 3, 8, 8), dtype="float32"), "raw", VoxelSize())
+
+    image = import_image(path=path, key="raw", stack_layout="ztyx[:2,:,:,:]")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (3, 2, 8, 8)
+
+
+def test_import_image_inline_slice_leaves_unlisted_axes_whole(tmp_path):
+    """Fewer entries than axes: only t, x and y are indexed, z stays whole."""
+    path = tmp_path / "timelapse.h5"
+    create_h5(path, np.zeros((3, 64, 64, 5), dtype="float32"), "raw", VoxelSize())
+
+    image = import_image(path=path, key="raw", stack_layout="txyz[:2,:,:]")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (2, 5, 64, 64)
+
+
+def test_import_image_inline_slice_integer_drops_axis(tmp_path):
+    path = tmp_path / "timelapse.h5"
+    create_h5(path, np.zeros((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+
+    image = import_image(path=path, key="raw", stack_layout="tzyx[0,:,:,:]")
+    assert image.image_layout == ImageLayout.ZYX
+    assert image.shape == (5, 16, 16)
+    assert image.properties.t_spacing is None
+
+
+def test_import_image_inline_slice_with_step(tmp_path):
+    path = tmp_path / "timelapse.h5"
+    create_h5(path, np.zeros((6, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+
+    image = import_image(path=path, key="raw", stack_layout="tzyx[0:6:2,:,:,:]")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (3, 5, 16, 16)
+
+
+def test_import_image_rejects_more_slice_entries_than_axes(tmp_path):
+    path = tmp_path / "timelapse.h5"
+    create_h5(path, np.zeros((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+
+    with pytest.raises(ValueError, match="entries but the stack layout"):
+        import_image(path=path, key="raw", stack_layout="tzyx[:2,:,:,:,:]")
+
+
+def test_crop_to_stack_layout_drops_axis_with_inversion_marker():
+    data = np.zeros((3, 4, 5, 6))
+
+    layout, cropped = crop_to_stack_layout(data, "tx-yz", ":,:,1,:")
+    assert layout == "txz"
+    assert cropped.shape == (3, 4, 6)
 
 
 def test_import_image_t_layout_non_ome_stays_unknown(tmp_path):

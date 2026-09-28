@@ -909,8 +909,7 @@ def import_image(
         semantic_type (str): Semantic type of the image, should be raw, segmentation,
             prediction or label
         stack_layout (str): Layout of the image, should be YX, CYX, ZYX, CZYX or ZCYX,
-            or a timelapse layout TYX, TCYX, TZYX or TCZYX (time import is
-            OME-TIFF only)
+            or a timelapse layout TYX, TCYX, TZYX or TCZYX
         m_slicing (str): Slicing to apply to the image, should be a string
             with the format [start:stop, ...] for each dimension in layout
             order (T first for timelapse layouts). A length-1 T slice

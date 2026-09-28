@@ -145,7 +145,7 @@ class Input_Tab:
         stack_layout={
             "value": "",
             "label": "Stack layout",
-            "tooltip": "t for time, c for channel, xyz for dimensions, e.g.:\nzyxc will be reshaped to [C][Z]YX, tzyx to [T][Z]YX.\nInvert an axis by adding `-` infront of the letter.",
+            "tooltip": "t for time, c for channel, xyz for dimensions, e.g.:\ntzyxc will be reshaped to [T][C][Z]YX.\nInvert an axis by adding `-` infront of the letter.",
             "widget_type": "LineEdit",
         },
     )

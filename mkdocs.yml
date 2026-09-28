@@ -120,8 +120,8 @@ nav:
   - Batch Workflow:
       - chapters/workflow_gui/index.md
 
-  - Timelapse:
-      - chapters/timelapse/index.md
+  - Time Series:
+      - chapters/timeseries/index.md
 
   - Dataset and Training:
       - chapters/panseg_models/index.md

@@ -8,20 +8,18 @@ or merge all segments into a single mesh.
 
 Once you have exported an image, you can create a workflow file to repeat the processing steps you have performed on image batches.
 
-## Timelapse
+## Time Series
 
-A timelapse exports as one file per format, time axis included. Tiff export
-is always OME-TIFF for timelapses, with the `TimeIncrement` metadata written
+Time series in Tiff format are exported as OME-TIFF files,
+with the `TimeIncrement` metadata written
 when the time spacing is known. H5 and zarr exports carry the layout
 (`axis_order` attribute) and the spacing when it is known, so a re-import
-recovers the timelapse and its spacing.
+recovers the time series and its spacing.
 
-For a 3D timelapse segmentation, the mesh export writes one file per
+For a 3D time series segmentation, the mesh export writes one file per
 timepoint, named `{name}_t000.{ext}`, `{name}_t001.{ext}`, and so on, with a
 zero-based index. Empty timepoints get their (empty) mesh file too, so the file count
-always matches the timepoint count. 2D timelapse segmentations (TYX) get no
-mesh files; mesh export is 3D only. See the [Timelapse
-chapter](../timelapse/index.md).
+always matches the timepoint count.
 
 ## Widget: Output
 

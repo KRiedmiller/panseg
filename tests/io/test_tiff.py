@@ -382,8 +382,8 @@ def _ome_pixels(root):
 
 
 @pytest.mark.parametrize("unit", ["s", "ms", "min"])
-def test_ome_timelapse_time_increment(make_ome_timelapse, unit):
-    path = make_ome_timelapse(t_increment=500, t_increment_unit=unit)
+def test_ome_time_increment(make_ome_time, unit):
+    path = make_ome_time(t_increment=500, t_increment_unit=unit)
     with tifffile.TiffFile(path) as tiff:
         series = tiff.series[0]
         assert series.axes == "TZYX"
@@ -395,8 +395,8 @@ def test_ome_timelapse_time_increment(make_ome_timelapse, unit):
     assert not [e for e in pixels if e.tag.endswith("Plane")]
 
 
-def test_ome_timelapse_uniform_plane_delta_t(make_ome_timelapse):
-    path = make_ome_timelapse(plane_delta_t=1000, plane_delta_t_unit="ms")
+def test_ome_timeseries_uniform_plane_delta_t(make_ome_timeseries):
+    path = make_ome_timeseries(plane_delta_t=1000, plane_delta_t_unit="ms")
     with tifffile.TiffFile(path) as tiff:
         root = ElementTree.fromstring(tiff.ome_metadata)
     pixels = _ome_pixels(root)
@@ -407,8 +407,8 @@ def test_ome_timelapse_uniform_plane_delta_t(make_ome_timelapse):
     assert all(p.get("DeltaTUnit") == "ms" for p in planes)
 
 
-def test_ome_timelapse_nonuniform_plane_delta_t(make_ome_timelapse):
-    path = make_ome_timelapse(nonuniform_plane_delta_t=True)
+def test_ome_timeseries_nonuniform_plane_delta_t(make_ome_timeseries):
+    path = make_ome_timeseries(nonuniform_plane_delta_t=True)
     with tifffile.TiffFile(path) as tiff:
         root = ElementTree.fromstring(tiff.ome_metadata)
     pixels = _ome_pixels(root)
@@ -426,8 +426,8 @@ def test_ome_timelapse_nonuniform_plane_delta_t(make_ome_timelapse):
     }
 
 
-def test_ome_timelapse_no_timing_metadata(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_ome_timeseries_no_timing_metadata(make_ome_timeseries):
+    path = make_ome_timeseries()
     with tifffile.TiffFile(path) as tiff:
         series = tiff.series[0]
         root = ElementTree.fromstring(tiff.ome_metadata)
@@ -437,8 +437,8 @@ def test_ome_timelapse_no_timing_metadata(make_ome_timelapse):
     assert not [e for e in pixels if e.tag.endswith("Plane")]
 
 
-def test_ome_timelapse_t1_squeezes(make_ome_timelapse):
-    path = make_ome_timelapse(axes="TYX", shape=(1, 16, 16))
+def test_ome_timeseries_t1_squeezes(make_ome_timeseries):
+    path = make_ome_timeseries(axes="TYX", shape=(1, 16, 16))
     with tifffile.TiffFile(path) as tiff:
         series = tiff.series[0]
         root = ElementTree.fromstring(tiff.ome_metadata)
@@ -459,31 +459,31 @@ def test_read_ome_axes_non_ome_tiff(tmp_path):
     assert read_ome_axes(out) is None
 
 
-def test_read_ome_axes_multifile_uses_first_position(ome_timelapse_multifile):
-    first, second, _ = ome_timelapse_multifile
+def test_read_ome_axes_multifile_uses_first_position(ome_timeseries_multifile):
+    first, second, _ = ome_timeseries_multifile
     assert read_ome_axes(first) == "TZYX"
     assert read_ome_axes(second) == "TZYX"
 
 
 @pytest.mark.parametrize("unit", ["s", "ms", "min"])
-def test_read_ome_time_spacing_time_increment(make_ome_timelapse, unit):
-    path = make_ome_timelapse(t_increment=500, t_increment_unit=unit)
+def test_read_ome_time_spacing_time_increment(make_ome_timeseries, unit):
+    path = make_ome_timeseries(t_increment=500, t_increment_unit=unit)
     assert read_ome_time_spacing(path) == (500.0, unit)
 
 
-def test_read_ome_time_spacing_uniform_plane_delta_t(make_ome_timelapse):
-    path = make_ome_timelapse(plane_delta_t=1000, plane_delta_t_unit="ms")
+def test_read_ome_time_spacing_uniform_plane_delta_t(make_ome_timeseries):
+    path = make_ome_timeseries(plane_delta_t=1000, plane_delta_t_unit="ms")
     assert read_ome_time_spacing(path) == (1000.0, "ms")
 
 
-def test_read_ome_time_spacing_nonuniform_plane_delta_t(make_ome_timelapse):
-    path = make_ome_timelapse(nonuniform_plane_delta_t=True)
+def test_read_ome_time_spacing_nonuniform_plane_delta_t(make_ome_timeseries):
+    path = make_ome_timeseries(nonuniform_plane_delta_t=True)
     with pytest.warns(UserWarning, match="DeltaT"):
         assert read_ome_time_spacing(path) == (None, "s")
 
 
-def test_read_ome_time_spacing_absent(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_read_ome_time_spacing_absent(make_ome_timeseries):
+    path = make_ome_timeseries()
     assert read_ome_time_spacing(path) == (None, "s")
 
 
@@ -517,20 +517,20 @@ def _set_tiff_data_uuid(path, uuid_text, file_name=None):
         tiff.pages[0].tags["ImageDescription"].overwrite(xml.encode("ascii"))
 
 
-def test_check_ome_single_file_rejects_multifile(ome_timelapse_multifile):
-    first, second, _ = ome_timelapse_multifile
+def test_check_ome_single_file_rejects_multifile(ome_timeseries_multifile):
+    first, second, _ = ome_timeseries_multifile
     with pytest.raises(ValueError, match="Multi-file OME-TIFF"):
         check_ome_single_file(first)
 
 
-def test_check_ome_single_file_allows_single_file(make_ome_timelapse):
-    check_ome_single_file(make_ome_timelapse())
+def test_check_ome_single_file_allows_single_file(make_ome_timeseries):
+    check_ome_single_file(make_ome_timeseries())
 
 
 def test_check_ome_single_file_allows_self_referencing_uuid(
-    make_ome_timelapse,
+    make_ome_timeseries,
 ):
-    path = make_ome_timelapse()
+    path = make_ome_timeseries()
     _set_tiff_data_uuid(
         path, "urn:uuid:11111111-1111-4111-8111-111111111111", path.name
     )
@@ -538,9 +538,9 @@ def test_check_ome_single_file_allows_self_referencing_uuid(
 
 
 def test_check_ome_single_file_allows_uuid_without_file_name(
-    make_ome_timelapse,
+    make_ome_timeseries,
 ):
-    path = make_ome_timelapse()
+    path = make_ome_timeseries()
     _set_tiff_data_uuid(path, "urn:uuid:11111111-1111-4111-8111-111111111111")
     check_ome_single_file(path)
 
@@ -555,7 +555,7 @@ def test_check_ome_single_file_ignores_non_ome(tmp_path):
 # as OME-TIFF (the ImageJ branch stays time-less), T fills the T slot of the
 # TZCYXS order, TimeIncrement is written only when the spacing is known. ---
 
-TIMELAPSE_EXPORT_CASES = [
+TIMESERIES_EXPORT_CASES = [
     pytest.param(
         "TYX", (4, 16, 16), {"SizeT": "4", "SizeC": "1", "SizeZ": "1"}, id="TYX"
     ),
@@ -574,8 +574,8 @@ TIMELAPSE_EXPORT_CASES = [
 ]
 
 
-@pytest.mark.parametrize("layout,shape,_sizes", TIMELAPSE_EXPORT_CASES)
-def test_create_tiff_timelapse_layouts_write_ome(tmp_path, layout, shape, _sizes):
+@pytest.mark.parametrize("layout,shape,_sizes", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_layouts_write_ome(tmp_path, layout, shape, _sizes):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
     out = tmp_path / "out.tiff"
     create_tiff(out, data, VoxelSize(voxels_size=(1.0, 1.0, 1.0)), layout=layout)
@@ -587,8 +587,8 @@ def test_create_tiff_timelapse_layouts_write_ome(tmp_path, layout, shape, _sizes
     assert np.array_equal(loaded, data)
 
 
-@pytest.mark.parametrize("layout,shape,sizes", TIMELAPSE_EXPORT_CASES)
-def test_create_tiff_timelapse_ome_pixel_sizes(tmp_path, layout, shape, sizes):
+@pytest.mark.parametrize("layout,shape,sizes", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_ome_pixel_sizes(tmp_path, layout, shape, sizes):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
     out = tmp_path / "out.tiff"
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
@@ -600,8 +600,8 @@ def test_create_tiff_timelapse_ome_pixel_sizes(tmp_path, layout, shape, sizes):
     assert _assert_no_warnings(read_tiff_voxel_size, out) == voxel_size
 
 
-@pytest.mark.parametrize("layout,shape,_sizes", TIMELAPSE_EXPORT_CASES)
-def test_create_tiff_timelapse_time_increment(tmp_path, layout, shape, _sizes):
+@pytest.mark.parametrize("layout,shape,_sizes", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_time_increment(tmp_path, layout, shape, _sizes):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
     out = tmp_path / "out.tiff"
     create_tiff(
@@ -619,8 +619,8 @@ def test_create_tiff_timelapse_time_increment(tmp_path, layout, shape, _sizes):
     assert read_ome_time_spacing(out) == (10.5, "s")
 
 
-@pytest.mark.parametrize("layout,shape,_sizes", TIMELAPSE_EXPORT_CASES)
-def test_create_tiff_timelapse_unknown_t_spacing_no_time_metadata(
+@pytest.mark.parametrize("layout,shape,_sizes", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_unknown_t_spacing_no_time_metadata(
     tmp_path, layout, shape, _sizes
 ):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
@@ -635,7 +635,7 @@ def test_create_tiff_timelapse_unknown_t_spacing_no_time_metadata(
     assert read_ome_time_spacing(out) == (None, "s")
 
 
-def test_create_tiff_timelapse_bigtiff_behavior_unchanged(tmp_path):
+def test_create_tiff_timeseries_bigtiff_behavior_unchanged(tmp_path):
     # forced bigtiff stays available for T layouts; BigTIFF is still only
     # chosen when forced or above the 4 GiB boundary
     data = (np.random.default_rng(0).random((4, 5, 16, 16)) * 100).astype("uint16")
@@ -670,8 +670,8 @@ def test_create_tiff_imagej_branch_stays_timeless(tmp_path):
         assert tiff.ome_metadata is None
 
 
-def test_ome_timelapse_multifile_chain(ome_timelapse_multifile):
-    first, second, data = ome_timelapse_multifile
+def test_ome_timeseries_multifile_chain(ome_timeseries_multifile):
+    first, second, data = ome_timeseries_multifile
     assert first.exists()
     assert second.exists()
     with tifffile.TiffFile(first) as tiff:

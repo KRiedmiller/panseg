@@ -85,7 +85,7 @@ class ImageDimensionality(Enum):
     Enum class for the spatial dimensionality of an image.
 
     Dimensionality is spatial only: it never counts the time or channel
-    axes. Time presence is the orthogonal ``is_timelapse`` property.
+    axes. Time presence is the orthogonal ``is_timeseries`` property.
 
     Attributes:
         TWO (str): 2D images
@@ -117,10 +117,10 @@ class ImageLayout(Enum):
         ZYX (str): 3D image with Z, X and Y axis
         CZYX (str): 3D image with Channel, Z, X and Y axis
         ZCYX (str): 3D image with Z, Channel, X and
-        TYX (str): 2D timelapse with Time, X and Y axis
-        TCYX (str): 2D timelapse with Time, Channel, X and Y axis
-        TZYX (str): 3D timelapse with Time, Z, X and Y axis
-        TCZYX (str): 3D timelapse with Time, Channel, Z, X and Y axis
+        TYX (str): 2D timeseries with Time, X and Y axis
+        TCYX (str): 2D timeseries with Time, Channel, X and Y axis
+        TZYX (str): 3D timeseries with Time, Z, X and Y axis
+        TCZYX (str): 3D timeseries with Time, Channel, Z, X and Y axis
     """
 
     YX = "YX"
@@ -154,7 +154,7 @@ class ImageLayout(Enum):
         return None
 
     @property
-    def is_timelapse(self) -> bool:
+    def is_timeseries(self) -> bool:
         """True if the layout carries a time axis."""
         return "T" in self.value
 
@@ -250,8 +250,8 @@ class ImageProperties(BaseModel):
         return self.image_layout.time_axis
 
     @property
-    def is_timelapse(self) -> bool:
-        return self.image_layout.is_timelapse
+    def is_timeseries(self) -> bool:
+        return self.image_layout.is_timeseries
 
     def interpolation_order(self, image_default: int = 1) -> int:
         if self.image_type == ImageType.LABEL:
@@ -389,7 +389,7 @@ class PanSegImage:
         assert self.channel_axis is not None, "No channel axis known!"
 
         # The split image keeps every axis except C.
-        prefix = "T" if self.is_timelapse else ""
+        prefix = "T" if self.is_timeseries else ""
         new_image_layout = ImageLayout(prefix + self.image_layout.spatial_axes)
 
         images = []
@@ -404,19 +404,19 @@ class PanSegImage:
         return images
 
     def split_timepoints(self) -> list["PanSegImage"]:
-        """Split a timelapse into single-timepoint images, one per timepoint.
+        """Split a timeseries into single-timepoint images, one per timepoint.
 
         Mirrors split_channels: each timepoint is a derive_new of this image
         with the T axis dropped from the layout (TZYX->ZYX, TYX->YX,
         TCZYX->CZYX, TCYX->CYX), the time slice as data and the name
         f"{name}_t{i}" (the channel naming convention). A timepoint is not a
-        timelapse: it carries no time spacing (t_spacing None, t_unit the
+        timeseries: it carries no time spacing (t_spacing None, t_unit the
         canonical "s"), so the caller restacks with restack_timepoints to
         stamp the parent spacing back on.
 
         A still image returns itself as the only timepoint.
         """
-        if not self.is_timelapse:
+        if not self.is_timeseries:
             return [self]
         assert self.time_axis is not None, "No time axis known!"
 
@@ -443,7 +443,7 @@ class PanSegImage:
                 self.semantic_type == image.semantic_type,
                 self.voxel_size == image.voxel_size,
                 self.dimensionality == image.dimensionality,
-                self.is_timelapse == image.is_timelapse,
+                self.is_timeseries == image.is_timeseries,
                 self.properties.t_spacing == image.properties.t_spacing,
             )
         ):
@@ -452,7 +452,7 @@ class PanSegImage:
         images = self.split_channels()
         images.extend(image.split_channels())
 
-        prefix = "T" if self.is_timelapse else ""
+        prefix = "T" if self.is_timeseries else ""
         new_image_layout = ImageLayout(prefix + "C" + self.image_layout.spatial_axes)
 
         new_props = ImageProperties(
@@ -466,8 +466,8 @@ class PanSegImage:
         )
 
         # The merged channel axis sits after T in the canonical order, so
-        # timelapses are stacked along axis 1, still images along axis 0.
-        stack_axis = 1 if self.is_timelapse else 0
+        # timeseriess are stacked along axis 1, still images along axis 0.
+        stack_axis = 1 if self.is_timeseries else 0
         data = np.stack([im.get_data() for im in images], axis=stack_axis)
         return PanSegImage(data, new_props)
 
@@ -531,7 +531,7 @@ class PanSegImage:
                 f[key].attrs["element_size_um"] = voxel_size.voxels_size
             f[key].attrs["panseg_image_metadata_json"] = metadata
             f[key].attrs["axis_order"] = self.image_layout.value
-            if self.is_timelapse and self.properties.t_spacing is not None:
+            if self.is_timeseries and self.properties.t_spacing is not None:
                 f[key].attrs["t_spacing"] = self.properties.t_spacing
                 f[key].attrs["t_spacing_unit"] = self.properties.t_unit
 
@@ -756,9 +756,9 @@ class PanSegImage:
         return self.channel_axis is not None
 
     @property
-    def is_timelapse(self) -> bool:
+    def is_timeseries(self) -> bool:
         """Returns True if the image carries a time axis, False otherwise."""
-        return self._properties.is_timelapse
+        return self._properties.is_timeseries
 
     def interpolation_order(self, image_default: int = 1) -> int:
         """Returns the default interpolation order used for the image."""
@@ -779,12 +779,12 @@ def restack_timepoints(
     t_unit: str = "s",
     name: str | None = None,
 ) -> PanSegImage:
-    """Restack single-timepoint images into a timelapse along a new outer T axis.
+    """Restack single-timepoint images into a timeseries along a new outer T axis.
 
     The inverse of split_timepoints: the timepoints are stacked with
     np.stack along a new leading axis and the layout gains a T prefix
     (ZYX->TZYX, YX->TYX). t_spacing/t_unit are stamped by the caller (they
-    are lost in the split) - usually the parent timelapse's spacing.
+    are lost in the split) - usually the parent timeseries's spacing.
 
     Args:
         timepoints (list[PanSegImage]): single-timepoint images; every
@@ -802,7 +802,7 @@ def restack_timepoints(
 
     first = timepoints[0]
     for timepoint in timepoints:
-        if timepoint.is_timelapse:
+        if timepoint.is_timeseries:
             raise ValueError(
                 f"Image {timepoint.name} to restack is not a single timepoint "
                 f"(layout {timepoint.image_layout})"
@@ -1015,7 +1015,7 @@ def import_image(
         semantic_type (str): Semantic type of the image, should be raw, segmentation,
             prediction or label
         stack_layout (str): Layout of the image, should be YX, CYX, ZYX, CZYX or ZCYX,
-            or a timelapse layout TYX, TCYX, TZYX or TCZYX
+            or a timeseries layout TYX, TCYX, TZYX or TCZYX
             A slice can follow the letters, e.g.
             "txyz[:3,:,:]", to truncate the data before the axes are
             reordered (see crop_to_stack_layout): the entries follow the
@@ -1073,8 +1073,8 @@ def import_image(
             image_layout=image_layout,
             original_voxel_size=voxel_size,
             source_file_name=path.stem,
-            t_spacing=t_spacing if image_layout.is_timelapse else None,
-            t_unit=t_unit if image_layout.is_timelapse else "s",
+            t_spacing=t_spacing if image_layout.is_timeseries else None,
+            t_unit=t_unit if image_layout.is_timeseries else "s",
         )
         if image_properties.image_type == ImageType.IMAGE:
             data = dp.normalize_01(data)
@@ -1307,7 +1307,7 @@ def save_image(
                 "Mesh export only supported for 3D, "
                 f"received: {image.dimensionality}, {image.name}"
             )
-        if image.is_timelapse:
+        if image.is_timeseries:
             # one mesh file per timepoint keeps the 1:1 timepoint-file
             # mapping; empty timepoints export their (empty) scene too
             time_axis = image.time_axis

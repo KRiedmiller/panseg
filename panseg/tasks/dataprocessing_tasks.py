@@ -152,7 +152,7 @@ def set_voxel_size_task(
 @task_tracker
 @timepoint_map
 def set_t_spacing_task(image: PanSegImage, t_spacing: float | None) -> PanSegImage:
-    """Set the time spacing of a timelapse image.
+    """Set the time spacing of a timeseries image.
 
     Property-only: the data is unchanged. Mirrors set_voxel_size_task, but
     for the time axis.
@@ -285,7 +285,7 @@ def remove_false_positives_by_foreground_probability_task(
 ) -> list[PanSegImage]:
     """Remove false positives from a segmentation based on the foreground probability.
 
-    On timelapse input the task runs per timepoint: label IDs are independent
+    On timeseries input the task runs per timepoint: label IDs are independent
     per timepoint, with no correspondence across timepoints. The foreground
     probability may be a still image, applied to every timepoint.
 
@@ -328,7 +328,7 @@ def fix_over_under_segmentation_from_nuclei_task(
     """
     Task to fix over- and under-segmentation of cells based on nuclear segmentation.
 
-    On timelapse input the task runs per timepoint: label IDs are independent
+    On timeseries input the task runs per timepoint: label IDs are independent
     per timepoint, with no correspondence across timepoints.
 
     Args:
@@ -363,7 +363,7 @@ def set_biggest_instance_to_zero_task(
     """
     Task to set the largest segment in a segmentation image to zero.
 
-    On timelapse input the task runs per timepoint: the largest instance is
+    On timeseries input the task runs per timepoint: the largest instance is
     zeroed within each timepoint, and label IDs are independent across
     timepoints.
 
@@ -397,7 +397,7 @@ def relabel_segmentation_task(
     Task to relabel a segmentation image contiguously, ensuring non-touching
     segments with the same ID are relabeled.
 
-    On timelapse input the task runs per timepoint: connected components are
+    On timeseries input the task runs per timepoint: connected components are
     renumbered per timepoint (spatial connectivity only), and label IDs are
     independent across timepoints.
 

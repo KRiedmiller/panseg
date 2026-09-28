@@ -63,7 +63,7 @@ def test_open_file_accepts_t_layouts(input_tab, mocker, tmp_path, t_layout):
         target="panseg.viewer_napari.widgets.input.schedule_task",
         autospec=True,
     )
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
     input_tab.path_changed_once = True
     kwargs = {
@@ -97,7 +97,7 @@ def test_open_file_passes_stack_layout_with_slice(input_tab, mocker, tmp_path):
         target="panseg.viewer_napari.widgets.input.schedule_task",
         autospec=True,
     )
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
     input_tab.path_changed_once = True
     layout = "tzyx[:3,:,:,:]"
@@ -177,15 +177,15 @@ def test_set_t_spacing_hidden_for_still_image(input_tab, napari_raw):
     assert not input_tab.widget_set_t_spacing.visible
 
 
-def test_set_t_spacing_shown_for_timelapse(input_tab, napari_timelapse):
-    input_tab.widget_details_layer_select.layer.choices = [napari_timelapse]
-    input_tab.widget_details_layer_select.layer.value = napari_timelapse
+def test_set_t_spacing_shown_for_timeseries(input_tab, napari_timeseries):
+    input_tab.widget_details_layer_select.layer.choices = [napari_timeseries]
+    input_tab.widget_details_layer_select.layer.value = napari_timeseries
     assert input_tab.widget_set_t_spacing.visible
 
 
-def test_set_t_spacing_schedules_task(input_tab, napari_timelapse, mocker):
-    input_tab.widget_details_layer_select.layer.choices = [napari_timelapse]
-    input_tab.widget_details_layer_select.layer.value = napari_timelapse
+def test_set_t_spacing_schedules_task(input_tab, napari_timeseries, mocker):
+    input_tab.widget_details_layer_select.layer.choices = [napari_timeseries]
+    input_tab.widget_details_layer_select.layer.value = napari_timeseries
 
     mocked_scheduler = mocker.patch(
         target="panseg.viewer_napari.widgets.input.schedule_task",
@@ -200,9 +200,9 @@ def test_set_t_spacing_schedules_task(input_tab, napari_timelapse, mocker):
     assert kwargs["task_kwargs"]["t_spacing"] == 30.0
 
 
-def test_set_t_spacing_empty_field_is_unknown(input_tab, napari_timelapse, mocker):
-    input_tab.widget_details_layer_select.layer.choices = [napari_timelapse]
-    input_tab.widget_details_layer_select.layer.value = napari_timelapse
+def test_set_t_spacing_empty_field_is_unknown(input_tab, napari_timeseries, mocker):
+    input_tab.widget_details_layer_select.layer.choices = [napari_timeseries]
+    input_tab.widget_details_layer_select.layer.value = napari_timeseries
 
     mocked_scheduler = mocker.patch(
         target="panseg.viewer_napari.widgets.input.schedule_task",
@@ -217,10 +217,10 @@ def test_set_t_spacing_empty_field_is_unknown(input_tab, napari_timelapse, mocke
 
 
 def test_set_t_spacing_invalid_field_ignored(
-    input_tab, napari_timelapse, mocker, caplog
+    input_tab, napari_timeseries, mocker, caplog
 ):
-    input_tab.widget_details_layer_select.layer.choices = [napari_timelapse]
-    input_tab.widget_details_layer_select.layer.value = napari_timelapse
+    input_tab.widget_details_layer_select.layer.choices = [napari_timeseries]
+    input_tab.widget_details_layer_select.layer.value = napari_timeseries
 
     mocked_scheduler = mocker.patch(
         target="panseg.viewer_napari.widgets.input.schedule_task",
@@ -235,10 +235,10 @@ def test_set_t_spacing_invalid_field_ignored(
 
 @pytest.mark.parametrize("bad_value", ["0", "-5"])
 def test_set_t_spacing_nonpositive_field_ignored(
-    input_tab, napari_timelapse, mocker, bad_value
+    input_tab, napari_timeseries, mocker, bad_value
 ):
-    input_tab.widget_details_layer_select.layer.choices = [napari_timelapse]
-    input_tab.widget_details_layer_select.layer.value = napari_timelapse
+    input_tab.widget_details_layer_select.layer.choices = [napari_timeseries]
+    input_tab.widget_details_layer_select.layer.value = napari_timeseries
 
     mocked_scheduler = mocker.patch(
         target="panseg.viewer_napari.widgets.input.schedule_task",
@@ -250,20 +250,20 @@ def test_set_t_spacing_nonpositive_field_ignored(
     mocked_scheduler.assert_not_called()
 
 
-def test_details_info_shows_time_spacing_when_known(input_tab, napari_timelapse):
-    input_tab.widget_details_layer_select.layer.choices = [napari_timelapse]
-    input_tab.widget_details_layer_select.layer.value = napari_timelapse
+def test_details_info_shows_time_spacing_when_known(input_tab, napari_timeseries):
+    input_tab.widget_details_layer_select.layer.choices = [napari_timeseries]
+    input_tab.widget_details_layer_select.layer.value = napari_timeseries
     assert "Time spacing: 10.00 s" in input_tab.widget_info.value
 
 
 def test_details_info_shows_unknown_time_spacing(
-    input_tab, napari_timelapse_unknown_t_spacing
+    input_tab, napari_timeseries_unknown_t_spacing
 ):
     input_tab.widget_details_layer_select.layer.choices = [
-        napari_timelapse_unknown_t_spacing
+        napari_timeseries_unknown_t_spacing
     ]
     input_tab.widget_details_layer_select.layer.value = (
-        napari_timelapse_unknown_t_spacing
+        napari_timeseries_unknown_t_spacing
     )
     assert "Time spacing: None" in input_tab.widget_info.value
 
@@ -287,8 +287,8 @@ def test_update_stack_layout_ome_prefill_from_reader_axes(input_tab, file_name, 
     assert input_tab.widget_open_file.stack_layout.value == axes
 
 
-def test_update_stack_layout_ome_synthetic_prefill(input_tab, make_ome_timelapse):
-    input_tab.widget_open_file.path.value = make_ome_timelapse()
+def test_update_stack_layout_ome_synthetic_prefill(input_tab, make_ome_timeseries):
+    input_tab.widget_open_file.path.value = make_ome_timeseries()
     assert input_tab.widget_open_file.stack_layout.value == "TZYX"
 
 
@@ -309,7 +309,7 @@ def test_update_stack_layout_non_ome_tiff_4d_no_small_dim_no_crash(input_tab, tm
 
 
 def test_update_stack_layout_h5_axis_order_prefill(input_tab, tmp_path):
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
     with h5py.File(path, "a") as f:
         f["raw"].attrs["axis_order"] = "TZYX"

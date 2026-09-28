@@ -77,8 +77,8 @@ class ProofreadingHandler:
         return self._state.active
 
     @property
-    def is_timelapse(self) -> bool:
-        """True if the session is bound to one timepoint of a timelapse."""
+    def is_timeseries(self) -> bool:
+        """True if the session is bound to one timepoint of a timeseries."""
         return self._state.timepoint is not None
 
     @property
@@ -86,28 +86,28 @@ class ProofreadingHandler:
         """Returns the timepoint the session is bound to."""
         if self._state.timepoint is None:
             raise ValueError(
-                "Session is not bound to a timepoint: not a timelapse segmentation"
+                "Session is not bound to a timepoint: not a timeseries segmentation"
             )
         return self._state.timepoint
 
     @property
     def n_timepoints(self) -> int:
         """Returns the number of timepoints of the segmentation layer."""
-        if not self.is_timelapse:
-            raise ValueError("Not a timelapse segmentation")
+        if not self.is_timeseries:
+            raise ValueError("Not a timeseries segmentation")
         return int(self.get_layer_data(self.seg_layer_name).shape[0])
 
     @property
     def scribbles_layer_name(self) -> str:
         """Returns the name of the scribbles canvas, tracking the session timepoint."""
-        if self.is_timelapse:
+        if self.is_timeseries:
             return f"{SCRIBBLES_LAYER_NAME} (t={self.timepoint})"
         return SCRIBBLES_LAYER_NAME
 
     @property
     def corrected_layer_name(self) -> str:
         """Returns the name of the corrected cells canvas, tracking the session timepoint."""
-        if self.is_timelapse:
+        if self.is_timeseries:
             return f"{CORRECTED_CELLS_LAYER_NAME} (t={self.timepoint})"
         return CORRECTED_CELLS_LAYER_NAME
 
@@ -118,7 +118,7 @@ class ProofreadingHandler:
         The helper layers carry no time dimension: their scale is the
         segmentation scale without the time entry.
         """
-        if self.is_timelapse:
+        if self.is_timeseries:
             return self.scale[1:]
         return self.scale
 
@@ -148,14 +148,14 @@ class ProofreadingHandler:
     def segmentation(self) -> np.ndarray:
         """Returns the current segmentation data.
 
-        For timelapse segmentations the session world is the slice: this is
+        For timeseries segmentations the session world is the slice: this is
         the layer data at the session timepoint.
         """
         if self._state.current_seg_layer_name is None:
             # return None
             raise ValueError("Segmentation layer not found")
         data = self.get_layer_data(self._state.current_seg_layer_name)
-        if self.is_timelapse:
+        if self.is_timeseries:
             return data[self.timepoint]
         return data
 
@@ -260,16 +260,16 @@ class ProofreadingHandler:
         Args:
             segmentation (PanSegImage): The segmentation image to set up.
             timepoint (int | None): The timepoint to bind the session to.
-                Must be given for timelapse segmentations; None for still
+                Must be given for timeseries segmentations; None for still
                 images.
 
         Raises:
-            ValueError: If the segmentation is a timelapse and no timepoint
+            ValueError: If the segmentation is a timeseries and no timepoint
                 is given.
         """
-        if timepoint is None and segmentation.is_timelapse:
+        if timepoint is None and segmentation.is_timeseries:
             raise ValueError(
-                "Timelapse segmentation: the proofreading session must be "
+                "Time series segmentation: the proofreading session must be "
                 "bound to a timepoint"
             )
         self.reset()
@@ -288,7 +288,7 @@ class ProofreadingHandler:
     def _remove_stale_helper_layers(self) -> None:
         """Removes helper canvases left over by a previous session.
 
-        Re-initialization may switch between a timelapse and a still
+        Re-initialization may switch between a timeseries and a still
         segmentation: the old canvases (named for another session or layout)
         would otherwise linger unused in the viewer. The canvases of the
         current session are kept.
@@ -305,7 +305,7 @@ class ProofreadingHandler:
                     viewer.layers.remove(layer)
 
     def rebind(self, timepoint: int) -> None:
-        """Re-binds an active timelapse session to another timepoint.
+        """Re-binds an active timeseries session to another timepoint.
 
         Re-binding is not re-initialization: the scribbles and corrected
         cells canvases persist with their content (they are only renamed to
@@ -321,8 +321,8 @@ class ProofreadingHandler:
             raise ValueError(
                 "Proofreading widget not initialized. Run the proofreading widget tool once first"
             )
-        if not self.is_timelapse:
-            raise ValueError("The session is not bound to a timelapse segmentation")
+        if not self.is_timeseries:
+            raise ValueError("The session is not bound to a timeseries segmentation")
         if not 0 <= timepoint < self.n_timepoints:
             raise ValueError(
                 f"Timepoint {timepoint} is out of range: "
@@ -386,7 +386,7 @@ class ProofreadingHandler:
     def _write_segmentation(self, data: np.ndarray) -> None:
         """Writes segmentation data back to the segmentation layer.
 
-        The data is one ZYX/YX slice for timelapse sessions (written into the
+        The data is one ZYX/YX slice for timeseries sessions (written into the
         session timepoint, leaving the other timepoints untouched) and the
         full array for still images.
 
@@ -399,7 +399,7 @@ class ProofreadingHandler:
         if self.seg_layer_name not in viewer.layers:
             raise ValueError(f"Layer {self.seg_layer_name} not found in viewer")
         layer = viewer.layers[self.seg_layer_name]
-        if self.is_timelapse:
+        if self.is_timeseries:
             layer.data[self.timepoint] = data
         else:
             layer.data = data
@@ -464,7 +464,7 @@ class ProofreadingHandler:
         with h5py.File(filepath, "a") as f:
             f.create_dataset(name="mask", data=mask_layer)
             f["mask"].attrs["corrected_cells"] = list(self.corrected_cells)
-            if self.is_timelapse:
+            if self.is_timeseries:
                 f["mask"].attrs["timepoint"] = self.timepoint
 
         for name, image in [("raw", raw), ("pmap", pmap)]:
@@ -490,7 +490,7 @@ class ProofreadingHandler:
             if "mask" not in f:
                 log("Corrected cells mask not found in file", thread="Load State")
                 corrected_cells = set()
-                if ps_segmentation.is_timelapse:
+                if ps_segmentation.is_timeseries:
                     # Legacy file without a timepoint attribute: fall back
                     # to the displayed timepoint (or the first one) and a
                     # slice-sized empty mask. Canonical layouts put T first.
@@ -605,7 +605,7 @@ class ProofreadingHandler:
     ):
         """Updates the viewer after proofreading is completed.
 
-        For timelapse sessions only the session timepoint is written: every
+        For timeseries sessions only the session timepoint is written: every
         other timepoint of the layer is left byte-identical.
 
         Args:
@@ -620,7 +620,7 @@ class ProofreadingHandler:
         if self.seg_layer_name in viewer.layers:
             layer = viewer.layers[self.seg_layer_name]
             index = (
-                (self.timepoint, *region_slice) if self.is_timelapse else region_slice
+                (self.timepoint, *region_slice) if self.is_timeseries else region_slice
             )
             layer.data[index] = seg_slice
             layer.refresh()
@@ -680,7 +680,7 @@ class Proofreading_Tab:
             " will be merged<br>Labels marked with <strong>different colors</strong> will be split.",
         )
 
-        # The int input is the timepoint selector for timelapse segmentations:
+        # The int input is the timepoint selector for timeseries segmentations:
         # moving it re-binds the session and moves the T slider (one-way).
         self.widget_timepoint_select = SpinBox(
             value=0,
@@ -688,7 +688,7 @@ class Proofreading_Tab:
             max=0,
             name="timepoint",
             label="Timepoint",
-            tooltip="Timelapse: proofreading is applied to the timepoint selected here only.\n"
+            tooltip="Proofreading is applied to the timepoint selected here only.\n"
             "The Scribbles and Correct Labels canvases persist across timepoint switches:\n"
             "marks from a processed timepoint are applied to the next one if you run\n"
             "Split/Merge before cleaning them. Use 'Clean scribbles' after switching timepoints.",
@@ -746,13 +746,13 @@ class Proofreading_Tab:
             self.widget_save_state,
         ]
 
-    def _timelapse_widgets(self) -> list:
-        """Returns the widgets shown only for timelapse sessions."""
+    def _timeseries_widgets(self) -> list:
+        """Returns the widgets shown only for timeseries sessions."""
         return [self.widget_timepoint_container]
 
     def _hide_all_widgets(self):
         """Hide all widgets initially."""
-        for widget in [*self._session_widgets(), *self._timelapse_widgets()]:
+        for widget in [*self._session_widgets(), *self._timeseries_widgets()]:
             widget.hide()
 
     def _show_all_widgets(self):
@@ -856,7 +856,7 @@ class Proofreading_Tab:
 
         ps_segmentation = PanSegImage.from_napari_layer(segmentation)
         timepoint = None
-        if ps_segmentation.is_timelapse:
+        if ps_segmentation.is_timeseries:
             # The int input defaults to the T slider position at initialisation.
             timepoint = self._displayed_timepoint()
             if timepoint is None or timepoint >= ps_segmentation.shape[0]:
@@ -922,12 +922,12 @@ class Proofreading_Tab:
     def _ensure_matching_timepoint(self, action: str) -> bool:
         """Returns True when the operation may run at the displayed timepoint.
 
-        In a timelapse session the T slider may show a different timepoint
+        In a timeseries session the T slider may show a different timepoint
         than the session is bound to (the selector moves the slider one-way
         only). Applying the operation then would silently target the wrong
         cell, so it is refused with a log hint.
         """
-        if not self.handler.is_timelapse:
+        if not self.handler.is_timeseries:
             return True
         displayed = self._displayed_timepoint()
         if displayed == self.handler.timepoint:
@@ -943,8 +943,8 @@ class Proofreading_Tab:
         return False
 
     def _update_timepoint_widgets(self) -> None:
-        """Shows and binds the timepoint selector for timelapse sessions, hides it otherwise."""
-        if self.handler.is_timelapse:
+        """Shows and binds the timepoint selector for timeseries sessions, hides it otherwise."""
+        if self.handler.is_timeseries:
             self.widget_timepoint_select.max = self.handler.n_timepoints - 1
             self.widget_timepoint_select.value = self.handler.timepoint
             self.widget_timepoint_container.show()
@@ -963,7 +963,7 @@ class Proofreading_Tab:
         Args:
             timepoint (int): The selected timepoint.
         """
-        if not self.handler.active or not self.handler.is_timelapse:
+        if not self.handler.active or not self.handler.is_timeseries:
             return
         if timepoint == self.handler.timepoint:
             return
@@ -1033,11 +1033,11 @@ class Proofreading_Tab:
                 level="error",
             )
 
-        # The session world is the slice: a timelapse boundary image is
+        # The session world is the slice: a timeseries boundary image is
         # restricted to the session timepoint so the unchanged 2D/3D
         # split/merge machinery runs on matching shapes.
         image_data = ps_image.get_data()
-        if ps_image.is_timelapse:
+        if ps_image.is_timeseries:
             image_data = image_data[self.handler.timepoint]
 
         @thread_worker(progress=True)
@@ -1126,9 +1126,9 @@ class Proofreading_Tab:
             filtered_seg[self.handler.corrected_cells_mask == 0] = 0
 
             properties = self.handler.seg_properties
-            if self.handler.is_timelapse:
+            if self.handler.is_timeseries:
                 # A single-timepoint layer of the proofread timepoint's
-                # corrected cells, not a full-length timelapse.
+                # corrected cells, not a full-length timeseries.
                 new_name = f"{properties.name}_corrected_t{self.handler.timepoint:03d}"
                 new_layout = ImageLayout(properties.image_layout.value.replace("T", ""))
             else:
@@ -1254,7 +1254,7 @@ class Proofreading_Tab:
     ):
         """Adds or removes a label at a given position to/from the corrected cells.
 
-        For timelapse sessions the operation is refused when the displayed
+        For timeseries sessions the operation is refused when the displayed
         timepoint diverges from the session timepoint: silently applying it
         would mark the cell at (k, z, y), a different cell than the one under
         the cursor.
@@ -1267,7 +1267,7 @@ class Proofreading_Tab:
 
         if not self._ensure_matching_timepoint("The cell marking"):
             return
-        if self.handler.is_timelapse:
+        if self.handler.is_timeseries:
             # The event position spans (t, z, y, x); the handler world is the
             # (z, y, x) slice, so the timepoint component is dropped and the
             # helper scale (without the time entry) rasterizes it.

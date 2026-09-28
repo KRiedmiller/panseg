@@ -36,17 +36,17 @@ def test_on_layer_select_raw(preprocessing_tab, napari_raw, mocker):
     mocked_hide.assert_not_called()
 
 
-def test_on_layer_select_timelapse_3d(preprocessing_tab, napari_timelapse, mocker):
+def test_on_layer_select_timeseries_3d(preprocessing_tab, napari_timeseries, mocker):
     mocked_show = mocker.patch.object(
         preprocessing_tab.widget_rescaling.rescaling_factor[0], "show"
     )
     mocked_hide = mocker.patch.object(
         preprocessing_tab.widget_rescaling.rescaling_factor[0], "hide"
     )
-    napari_timelapse.scale = (0.5, 2.0, 0.25, 0.125)
+    napari_timeseries.scale = (0.5, 2.0, 0.25, 0.125)
 
     # no 4d hide guard: the selection runs the normal 3D path
-    preprocessing_tab._on_layer_selection(napari_timelapse)
+    preprocessing_tab._on_layer_selection(napari_timeseries)
 
     # TZYX behaves as 3D
     mocked_show.assert_called_once()
@@ -60,7 +60,7 @@ def test_on_layer_select_timelapse_3d(preprocessing_tab, napari_timelapse, mocke
     assert preprocessing_tab.widget_rescaling.reference_shape.value == (5, 16, 16)
 
 
-def test_on_layer_select_timelapse_2d(preprocessing_tab, napari_raw_tyx, mocker):
+def test_on_layer_select_timeseries_2d(preprocessing_tab, napari_raw_tyx, mocker):
     mocked_show = mocker.patch.object(
         preprocessing_tab.widget_rescaling.rescaling_factor[0], "show"
     )
@@ -103,7 +103,7 @@ def test_on_layer_select_multichannel_3d_shows_widgets(
     assert preprocessing_tab.widget_rescaling.reference_shape.value == (5, 16, 16)
 
 
-def test_on_layer_select_multichannel_timelapse_prefills_spatial_axes(
+def test_on_layer_select_multichannel_timeseries_prefills_spatial_axes(
     preprocessing_tab, napari_raw_tczyx, mocker
 ):
     mocked_show = mocker.patch.object(
@@ -161,14 +161,14 @@ def test_add_crop_shapes_layer_3d(preprocessing_tab, napari_raw, mocker):
     viewer.add_shapes.assert_called_once_with(ndim=3, scale=(2.0, 0.25, 0.125))
 
 
-def test_add_crop_shapes_layer_timelapse_follows_spatial_dimensionality(
-    preprocessing_tab, napari_timelapse, napari_raw_tyx, mocker
+def test_add_crop_shapes_layer_timeseries_follows_spatial_dimensionality(
+    preprocessing_tab, napari_timeseries, napari_raw_tyx, mocker
 ):
     viewer = mocker.Mock()
 
-    napari_timelapse.scale = (0.5, 2.0, 0.25, 0.125)
-    preprocessing_tab.widget_layer_select.layer.choices = (napari_timelapse,)
-    preprocessing_tab.widget_layer_select.layer.value = napari_timelapse
+    napari_timeseries.scale = (0.5, 2.0, 0.25, 0.125)
+    preprocessing_tab.widget_layer_select.layer.choices = (napari_timeseries,)
+    preprocessing_tab.widget_layer_select.layer.value = napari_timeseries
     preprocessing_tab._add_crop_shapes_layer(viewer)
     viewer.add_shapes.assert_called_with(ndim=3, scale=(2.0, 0.25, 0.125))
 
@@ -191,13 +191,13 @@ def test_add_crop_shapes_layer_no_selection(preprocessing_tab, mocker):
     viewer.add_shapes.assert_called_once_with(ndim=3, scale=(1.0, 1.0, 1.0))
 
 
-def test_on_cropping_image_changed_timelapse_3d(
-    preprocessing_tab, mocker, napari_timelapse
+def test_on_cropping_image_changed_timeseries_3d(
+    preprocessing_tab, mocker, napari_timeseries
 ):
     preprocessing_tab.initialised_widget_cropping = True
     mocked_show = mocker.patch.object(preprocessing_tab.widget_cropping.crop_z, "show")
 
-    assert preprocessing_tab._on_cropping_image_changed(napari_timelapse) is None
+    assert preprocessing_tab._on_cropping_image_changed(napari_timeseries) is None
 
     mocked_show.assert_called_once()
     # the z range is over z slices, not timepoints
@@ -205,7 +205,7 @@ def test_on_cropping_image_changed_timelapse_3d(
     assert preprocessing_tab.widget_cropping.crop_z.value == (0, 5)
 
 
-def test_on_cropping_image_changed_timelapse_2d(
+def test_on_cropping_image_changed_timeseries_2d(
     preprocessing_tab, mocker, napari_raw_tyx
 ):
     preprocessing_tab.initialised_widget_cropping = True

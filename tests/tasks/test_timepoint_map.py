@@ -46,7 +46,7 @@ from panseg.tasks.workflow_handler import (
     workflow_handler,
 )
 
-TIMELAPSE_T_SPACING = 10.0
+TIMESERIES_T_SPACING = 10.0
 
 
 def make_image(
@@ -85,8 +85,8 @@ def make_segmentation(data: np.ndarray, layout: str, name: str = "seg") -> PanSe
     [("TZYX", "ZYX"), ("TYX", "YX"), ("TCZYX", "CZYX")],
 )
 def test_split_timepoints_drops_t(layout, timepoint_layout, request):
-    data = request.getfixturevalue("timelapse_" + layout.lower())
-    image = make_image(data, layout, t_spacing=TIMELAPSE_T_SPACING)
+    data = request.getfixturevalue("timeseries_" + layout.lower())
+    image = make_image(data, layout, t_spacing=TIMESERIES_T_SPACING)
 
     timepoints = image.split_timepoints()
 
@@ -95,7 +95,7 @@ def test_split_timepoints_drops_t(layout, timepoint_layout, request):
         f"image_t{i}" for i in range(data.shape[0])
     ]
     assert all(tp.image_layout == ImageLayout(timepoint_layout) for tp in timepoints)
-    assert all(not tp.is_timelapse for tp in timepoints)
+    assert all(not tp.is_timeseries for tp in timepoints)
     assert all(tp.properties.t_spacing is None for tp in timepoints)
     assert all(tp.voxel_size == image.voxel_size for tp in timepoints)
     assert all(tp.semantic_type == image.semantic_type for tp in timepoints)
@@ -112,8 +112,8 @@ def test_split_timepoints_still_image_returns_self():
 
 @pytest.mark.parametrize("layout", ["TZYX", "TYX", "TCZYX"])
 def test_restack_timepoints_roundtrip(layout, request):
-    data = request.getfixturevalue("timelapse_" + layout.lower())
-    image = make_image(data, layout, t_spacing=TIMELAPSE_T_SPACING)
+    data = request.getfixturevalue("timeseries_" + layout.lower())
+    image = make_image(data, layout, t_spacing=TIMESERIES_T_SPACING)
     timepoints = image.split_timepoints()
 
     restacked = restack_timepoints(
@@ -123,15 +123,15 @@ def test_restack_timepoints_roundtrip(layout, request):
     assert restacked.image_layout == image.image_layout
     assert restacked.shape == image.shape
     np.testing.assert_array_equal(restacked.get_data(), data)
-    assert restacked.properties.t_spacing == TIMELAPSE_T_SPACING
+    assert restacked.properties.t_spacing == TIMESERIES_T_SPACING
     assert restacked.name == "image"
     assert restacked.semantic_type == image.semantic_type
     assert restacked.voxel_size == image.voxel_size
     assert restacked.source_file_name == image.source_file_name
 
 
-def test_restack_timepoints_rejects_incompatible_timepoints(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+def test_restack_timepoints_rejects_incompatible_timepoints(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
     timepoints = image.split_timepoints()
 
     # shape mismatch
@@ -171,7 +171,7 @@ def test_restack_timepoints_rejects_incompatible_timepoints(timelapse_tzyx):
     with pytest.raises(ValueError, match="not compatible"):
         restack_timepoints([timepoints[0], other_spacing], t_spacing=None)
 
-    # a timelapse is not a timepoint
+    # a timeseries is not a timepoint
     with pytest.raises(ValueError, match="not a single timepoint"):
         restack_timepoints([timepoints[0], image], t_spacing=None)
 
@@ -237,35 +237,35 @@ def _clean_dag_and_log():
     workflow_handler.clean_dag()
 
 
-def test_decorator_maps_over_timepoints_and_restacks(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+def test_decorator_maps_over_timepoints_and_restacks(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
 
     result = log_timepoints_task(image=image, factor=2.0)
 
-    assert result.is_timelapse
+    assert result.is_timeseries
     assert result.image_layout == ImageLayout.TZYX
     assert result.shape == image.shape
-    np.testing.assert_array_equal(result.get_data(), timelapse_tzyx * 2.0)
-    assert result.properties.t_spacing == TIMELAPSE_T_SPACING
+    np.testing.assert_array_equal(result.get_data(), timeseries_tzyx * 2.0)
+    assert result.properties.t_spacing == TIMESERIES_T_SPACING
     # the restacked layer carries the name the task gives a still image,
     # and the timepoints were transient locals
     assert result.name == "image_scaled"
     assert [tp.name for tp in CALL_LOG] == [f"image_t{i}" for i in range(4)]
-    assert all(not tp.is_timelapse for tp in CALL_LOG)
+    assert all(not tp.is_timeseries for tp in CALL_LOG)
 
 
-def test_decorator_passes_still_images_through(timelapse_tzyx):
-    still = make_image(timelapse_tzyx[0], "ZYX")
+def test_decorator_passes_still_images_through(timeseries_tzyx):
+    still = make_image(timeseries_tzyx[0], "ZYX")
 
     result = log_timepoints_task(image=still, factor=2.0)
 
     assert result.name == "image_scaled"
-    assert not result.is_timelapse
+    assert not result.is_timeseries
     assert CALL_LOG == [still]
 
 
-def test_decorator_aborts_on_failed_timepoint(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX")
+def test_decorator_aborts_on_failed_timepoint(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX")
 
     # GUI path: the task_tracker wrapper turns the exception into a
     # Task_message, the identical flow as any task failure
@@ -285,8 +285,8 @@ def test_decorator_aborts_on_failed_timepoint(timelapse_tzyx):
     assert [_timepoint_index(tp) for tp in CALL_LOG] == [0, 1]
 
 
-def test_decorator_propagates_task_message_from_inner_call(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX")
+def test_decorator_propagates_task_message_from_inner_call(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX")
 
     result = message_at_first_timepoint_task(image=image)
 
@@ -297,8 +297,8 @@ def test_decorator_propagates_task_message_from_inner_call(timelapse_tzyx):
     assert workflow_handler.dag.list_tasks == []
 
 
-def test_decorator_drives_tracker_at_timepoint_granularity(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX")
+def test_decorator_drives_tracker_at_timepoint_granularity(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX")
 
     class FakeTracker:
         total = 0
@@ -327,8 +327,8 @@ def stack_level_task(image: PanSegImage) -> PanSegImage:
     return image.derive_new(image.get_data(), name=f"{image.name}_stack")
 
 
-def test_undecorated_task_rejects_timelapse_input(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX")
+def test_undecorated_task_rejects_timeseries_input(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX")
 
     # GUI path: the task_tracker wrapper rejects before the call
     with pytest.raises(ValueError, match="neither frame-mapped.*nor stack-level"):
@@ -340,16 +340,16 @@ def test_undecorated_task_rejects_timelapse_input(timelapse_tzyx):
         registered(image=image)
 
     # still images pass the guard untouched
-    still = make_image(timelapse_tzyx[0], "ZYX")
+    still = make_image(timeseries_tzyx[0], "ZYX")
     assert not_mapped_task(image=still).name == "image_ok"
 
 
-def test_stack_level_task_accepts_timelapse(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX")
+def test_stack_level_task_accepts_timeseries(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX")
 
     result = stack_level_task(image=image)
 
-    # the task body saw the whole timelapse, no loop, no restack
+    # the task body saw the whole timeseries, no loop, no restack
     assert result.image_layout == ImageLayout.TZYX
     assert result.name == "image_stack"
 
@@ -385,12 +385,12 @@ def test_all_seventeen_frame_mapped_tasks_are_decorated():
         )
 
 
-def test_frame_mapped_task_records_one_dag_node(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+def test_frame_mapped_task_records_one_dag_node(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
 
     result = gaussian_smoothing_task(image=image, sigma=1.0)
 
-    # one node: the timelapse in, the restacked timelapse out, the same
+    # one node: the timeseries in, the restacked timeseries out, the same
     # parameters as a still-image call - timepoint_map is not a parameter
     nodes = [
         task for task in workflow_handler.dag.list_tasks if "gaussian" in task.func
@@ -400,14 +400,14 @@ def test_frame_mapped_task_records_one_dag_node(timelapse_tzyx):
     assert nodes[0].parameters == {"sigma": 1.0}
     assert nodes[0].outputs == [result.unique_name]
 
-    assert result.is_timelapse
+    assert result.is_timeseries
     assert result.image_layout == ImageLayout.TZYX
     assert result.shape == image.shape
     assert result.name == "image_smoothed"
 
 
-def test_frame_mapped_task_on_headless_runner(timelapse_tzyx, tmp_path):
-    image = make_image(timelapse_tzyx, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+def test_frame_mapped_task_on_headless_runner(timeseries_tzyx, tmp_path):
+    image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
     result = gaussian_smoothing_task(image=image, sigma=1.0)
     task = workflow_handler.dag.list_tasks[-1]
 
@@ -419,15 +419,15 @@ def test_frame_mapped_task_on_headless_runner(timelapse_tzyx, tmp_path):
     var_space = runner.run_task(task, var_space)
 
     # the registered callable ran the loop and produced one restacked
-    # timelapse; the timepoints stayed locals and never entered var_space
+    # timeseries; the timepoints stayed locals and never entered var_space
     assert set(var_space) == {image.unique_name, result.unique_name}
     replayed = var_space[result.unique_name]
-    assert replayed.is_timelapse
+    assert replayed.is_timeseries
     assert replayed.image_layout == ImageLayout.TZYX
     np.testing.assert_allclose(replayed.get_data(), result.get_data())
 
 
-def _ramp_timelapse(n_timepoints: int, value: float) -> PanSegImage:
+def _ramp_timeseries(n_timepoints: int, value: float) -> PanSegImage:
     data = np.zeros((n_timepoints, 4, 8, 8), dtype="float32")
     for t in range(n_timepoints):
         data[t] = t + value
@@ -435,19 +435,21 @@ def _ramp_timelapse(n_timepoints: int, value: float) -> PanSegImage:
 
 
 def test_image_pair_operation_broadcasts_still_input():
-    timelapse = _ramp_timelapse(3, value=1.0)
+    timeseries = _ramp_timeseries(3, value=1.0)
     static = make_image(np.full((4, 8, 8), 10.0, dtype="float32"), "ZYX", name="static")
 
-    result = image_pair_operation_task(image1=timelapse, image2=static, operation="add")
+    result = image_pair_operation_task(
+        image1=timeseries, image2=static, operation="add"
+    )
 
-    assert result.is_timelapse
+    assert result.is_timeseries
     assert result.name == "ramp_add_static"
     for t in range(3):
         np.testing.assert_allclose(result.get_data()[t], t + 11.0)
 
 
-def test_remove_false_positives_broadcasts_static_foreground(timelapse_segmentation):
-    segmentation = make_segmentation(timelapse_segmentation, "TZYX", name="seg")
+def test_remove_false_positives_broadcasts_static_foreground(timeseries_segmentation):
+    segmentation = make_segmentation(timeseries_segmentation, "TZYX", name="seg")
     foreground = make_image(
         np.ones((5, 16, 16), dtype="float32"), "ZYX", name="foreground"
     )
@@ -457,20 +459,20 @@ def test_remove_false_positives_broadcasts_static_foreground(timelapse_segmentat
     )
 
     # both outputs restack, each timepoint against the static foreground map
-    assert kept.is_timelapse and removed.is_timelapse
+    assert kept.is_timeseries and removed.is_timeseries
     assert kept.name == "seg_fg_filtered"
     assert removed.name == "seg_false_positives"
     # the static foreground map (all 1.0) keeps every region of every
     # timepoint; the functional relabels sequentially, so compare support
-    np.testing.assert_array_equal(kept.get_data() != 0, timelapse_segmentation != 0)
+    np.testing.assert_array_equal(kept.get_data() != 0, timeseries_segmentation != 0)
     assert not removed.get_data().any()
 
 
 def test_multi_image_task_without_broadcast_rejects_mixed_inputs(
-    timelapse_segmentation,
+    timeseries_segmentation,
 ):
-    cell_seg = make_segmentation(timelapse_segmentation, "TZYX", name="cells")
-    nuclei_seg = make_segmentation(timelapse_segmentation[0], "ZYX", name="nuclei")
+    cell_seg = make_segmentation(timeseries_segmentation, "TZYX", name="cells")
+    nuclei_seg = make_segmentation(timeseries_segmentation[0], "ZYX", name="nuclei")
 
     # the GUI wrapper translates the exception into a Task_message (covered
     # by the abort test); the registered callable raises, as headless sees it
@@ -487,9 +489,9 @@ def test_multi_image_task_without_broadcast_rejects_mixed_inputs(
         )
 
 
-def test_timelapse_inputs_with_different_lengths_are_rejected():
-    short = _ramp_timelapse(3, value=1.0)
-    long = _ramp_timelapse(4, value=1.0)
+def test_timeseries_inputs_with_different_lengths_are_rejected():
+    short = _ramp_timeseries(3, value=1.0)
+    long = _ramp_timeseries(4, value=1.0)
 
     with pytest.raises(ValueError, match="different numbers of timepoints"):
         workflow_handler.func_registry.get_func("image_pair_operation_task")(
@@ -497,7 +499,7 @@ def test_timelapse_inputs_with_different_lengths_are_rejected():
         )
 
 
-def test_timelapse_inputs_with_different_t_spacing_are_rejected():
+def test_timeseries_inputs_with_different_t_spacing_are_rejected():
     first = make_image(
         np.zeros((2, 4, 8, 8), dtype="float32"),
         "TZYX",
@@ -540,15 +542,15 @@ def test_equal_t_spacing_becomes_the_shared_spacing(t_spacing, expected):
     assert result.properties.t_spacing == expected
 
 
-def test_set_t_spacing_task_sets_known_value(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX")
+def test_set_t_spacing_task_sets_known_value(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX")
 
     result = set_t_spacing_task(image=image, t_spacing=30.0)
 
     assert result.properties.t_spacing == 30.0
     assert result.name == "image_set_t_spacing"
     # property-only: the data is unchanged
-    np.testing.assert_array_equal(result.get_data(), timelapse_tzyx)
+    np.testing.assert_array_equal(result.get_data(), timeseries_tzyx)
     # recorded as a DAG node for the headless yaml mechanism
     nodes = [
         task for task in workflow_handler.dag.list_tasks if "set_t_spacing" in task.func
@@ -558,16 +560,16 @@ def test_set_t_spacing_task_sets_known_value(timelapse_tzyx):
     assert nodes[0].outputs == [result.unique_name]
 
 
-def test_set_t_spacing_task_clears_known_value(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+def test_set_t_spacing_task_clears_known_value(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
 
     result = set_t_spacing_task(image=image, t_spacing=None)
 
     assert result.properties.t_spacing is None
 
 
-def test_relabel_segmentation_is_per_timepoint(timelapse_segmentation):
-    segmentation = make_segmentation(timelapse_segmentation, "TZYX", name="seg")
+def test_relabel_segmentation_is_per_timepoint(timeseries_segmentation):
+    segmentation = make_segmentation(timeseries_segmentation, "TZYX", name="seg")
 
     result = relabel_segmentation_task(image=segmentation)
 
@@ -603,16 +605,16 @@ def test_label_semantics_are_stated_in_the_docstrings():
         assert "timepoint" in task.__doc__
 
 
-def test_stack_level_io_tasks_accept_timelapses(timelapse_tzyx, tmp_path):
-    first = make_image(timelapse_tzyx, "TZYX", name="first")
-    second = make_image(timelapse_tzyx, "TZYX", name="second")
+def test_stack_level_io_tasks_accept_timeseriess(timeseries_tzyx, tmp_path):
+    first = make_image(timeseries_tzyx, "TZYX", name="first")
+    second = make_image(timeseries_tzyx, "TZYX", name="second")
 
     # merge_channels_task is stack-level: T-aware two-stage merge, no loop
     merged = merge_channels_task(image_0=first, image_1=second)
     assert merged.image_layout == ImageLayout.TCZYX
     assert merged.shape == (4, 2, 5, 16, 16)
 
-    # export_image_task is stack-level: it writes the whole timelapse as
+    # export_image_task is stack-level: it writes the whole timeseries as
     # one file
     export_image_task(
         image=first,
@@ -625,18 +627,18 @@ def test_stack_level_io_tasks_accept_timelapses(timelapse_tzyx, tmp_path):
     assert (tmp_path / "first_export.h5").exists()
 
 
-# --- per-stage pipeline behavior on timelapses ---
+# --- per-stage pipeline behavior on timeseriess ---
 # (spec: "Per-stage pipeline behavior"; falls out of the wrapper, no new
 # algorithm code)
 
 
-def test_crop_applies_one_spatial_region_to_every_timepoint(timelapse_tzyx):
-    image = make_image(timelapse_tzyx, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+def test_crop_applies_one_spatial_region_to_every_timepoint(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
     rectangle = np.array([[0, 2, 2], [0, 2, 9], [0, 9, 9], [0, 9, 2]])
 
     result = image_cropping_task(image=image, rectangle=rectangle, crop_z=(1, 4))
 
-    assert result.is_timelapse
+    assert result.is_timeseries
     assert result.image_layout == ImageLayout.TZYX
     assert result.shape == (4, 3, 7, 7)
     # identical spatial crop at every timepoint: each output frame is the
@@ -651,12 +653,12 @@ def test_crop_applies_one_spatial_region_to_every_timepoint_2d():
     data = np.zeros((3, 12, 12), dtype="float32")
     for t in range(3):
         data[t] = np.arange(144, dtype="float32").reshape(12, 12) + t * 100.0
-    image = make_image(data, "TYX", t_spacing=TIMELAPSE_T_SPACING)
+    image = make_image(data, "TYX", t_spacing=TIMESERIES_T_SPACING)
     rectangle = np.array([[2, 2], [2, 9], [9, 9]])
 
     result = image_cropping_task(image=image, rectangle=rectangle)
 
-    assert result.is_timelapse
+    assert result.is_timeseries
     assert result.image_layout == ImageLayout.TYX
     assert result.shape == (3, 7, 7)
     for t in range(3):
@@ -667,19 +669,19 @@ def test_rescale_leaves_t_untouched_and_preserves_t_spacing():
     data = np.zeros((3, 4, 16, 16), dtype="float32")
     for t in range(3):
         data[t] = t + 1  # per-timepoint constant: mixing frames would be visible
-    image = make_image(data, "TZYX", t_spacing=TIMELAPSE_T_SPACING)
+    image = make_image(data, "TZYX", t_spacing=TIMESERIES_T_SPACING)
 
     result = image_rescale_to_voxel_size_task(
         image=image, new_voxels_size=(2.0, 2.0, 2.0), new_unit="um"
     )
 
-    assert result.is_timelapse
+    assert result.is_timeseries
     assert result.image_layout == ImageLayout.TZYX
     # T untouched: same number of timepoints, each frame still its own constant
     assert result.shape == (3, 2, 8, 8)
     for t in range(3):
         np.testing.assert_allclose(result.get_data()[t], t + 1)
-    assert result.properties.t_spacing == TIMELAPSE_T_SPACING
+    assert result.properties.t_spacing == TIMESERIES_T_SPACING
 
 
 def test_normalization_runs_per_timepoint():
@@ -687,7 +689,7 @@ def test_normalization_runs_per_timepoint():
     data = np.zeros((2, 4, 8, 8), dtype="float32")
     data[0] = ramp
     data[1] = 2.0 * ramp + 5.0  # illumination drift at t1
-    image1 = make_image(data, "TZYX", t_spacing=TIMELAPSE_T_SPACING, name="drift")
+    image1 = make_image(data, "TZYX", t_spacing=TIMESERIES_T_SPACING, name="drift")
     image2 = make_image(np.zeros((4, 8, 8), dtype="float32"), "ZYX", name="zeros")
 
     result = image_pair_operation_task(
@@ -698,7 +700,7 @@ def test_normalization_runs_per_timepoint():
         normalize_output=False,
     )
 
-    assert result.is_timelapse
+    assert result.is_timeseries
     # the min-max normalizes each timepoint against its own range, so the
     # drifted timepoint lands on the same pattern as the first
     for t in range(2):

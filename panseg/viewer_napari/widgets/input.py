@@ -368,11 +368,11 @@ class Input_Tab:
         self,
         t_spacing: str = "",
     ) -> None:
-        """Set the time spacing of the selected timelapse layer."""
+        """Set the time spacing of the selected timeseries layer."""
         ps_image = self._selected_panseg_image()
-        if not ps_image.is_timelapse:
+        if not ps_image.is_timeseries:
             raise ValueError(
-                f"Layer {ps_image.name} is not a timelapse, no time spacing to set."
+                f"Layer {ps_image.name} is not a timeseries, no time spacing to set."
             )
 
         value = t_spacing.strip()
@@ -420,7 +420,7 @@ class Input_Tab:
         self.widget_info.show()
 
         ps_image = PanSegImage.from_napari_layer(layer)
-        if ps_image.is_timelapse:
+        if ps_image.is_timeseries:
             self.widget_set_t_spacing.show()
         else:
             self.widget_set_t_spacing.hide()
@@ -446,7 +446,7 @@ class Input_Tab:
             f"{parts['shape']:<30} {parts['voxels']:<30}\n"
             f"{parts['type']:<30} {parts['layout']:<30}"
         )
-        if ps_image.is_timelapse:
+        if ps_image.is_timeseries:
             t_spacing = ps_image.properties.t_spacing
             t_spacing_formatted = (
                 f"{t_spacing:.2f} {ps_image.properties.t_unit}"

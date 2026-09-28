@@ -79,7 +79,7 @@ def test_on_images_changed_labels(output_tab, mocker, napari_segmentation):
     assert output_tab.widget_export_image.data_type.value == "uint16"
 
 
-def _timelapse_layer(name: str, seed: int, layout: str = "TZYX") -> Image:
+def _timeseries_layer(name: str, seed: int, layout: str = "TZYX") -> Image:
     voxel_size = (1.0, 1.0, 1.0)
     shape = (4, 5, 16, 16) if layout == "TZYX" else (4, 16, 16)
     data = np.random.default_rng(seed).random(shape).astype("float32")
@@ -102,16 +102,16 @@ def _timelapse_layer(name: str, seed: int, layout: str = "TZYX") -> Image:
         ("TYX", ImageLayout.TCYX, (4, 2, 16, 16)),
     ],
 )
-def test_export_image_merges_timelapse_channels(
+def test_export_image_merges_timeseries_channels(
     output_tab, mocker, layout, expected_layout, expected_shape
 ):
-    """Merging two single-channel timelapse layers through the
+    """Merging two single-channel timeseries layers through the
     additional-channels widget exports a TCZYX/TCYX image."""
     mocked_export = mocker.patch(
         "panseg.viewer_napari.widgets.output.export_image_task"
     )
-    first = _timelapse_layer("channel_1", seed=1, layout=layout)
-    second = _timelapse_layer("channel_2", seed=2, layout=layout)
+    first = _timeseries_layer("channel_1", seed=1, layout=layout)
+    second = _timeseries_layer("channel_2", seed=2, layout=layout)
 
     output_tab.widget_export_image.image.choices = [first, second]
     output_tab.widget_export_image.image.value = first

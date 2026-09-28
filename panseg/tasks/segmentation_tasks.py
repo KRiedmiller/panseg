@@ -38,7 +38,7 @@ def dt_watershed_task(
     It handles both standard boundary probability maps and nuclei images, with options for
     various preprocessing and segmentation parameters.
 
-    On timelapse input the task runs per timepoint: label IDs are independent
+    On timeseries input the task runs per timepoint: label IDs are independent
     per timepoint, with no correspondence across timepoints.
 
     Args:
@@ -127,7 +127,7 @@ def clustering_segmentation_task(
 ) -> PanSegImage:
     """Agglomerative segmentation task.
 
-    On timelapse input the task runs per timepoint: label IDs are independent
+    On timeseries input the task runs per timepoint: label IDs are independent
     per timepoint, with no correspondence across timepoints.
 
     Args:
@@ -213,7 +213,7 @@ def lmc_segmentation_task(
             a high-value bias the segmentation towards the over-segmentation. (default: 0.5)
         post_min_size (int): minimal size of the segments after Multicut. (default: 100)
 
-    On timelapse input the task runs per timepoint: label IDs are independent
+    On timeseries input the task runs per timepoint: label IDs are independent
     per timepoint, with no correspondence across timepoints.
     """
     if (
@@ -301,7 +301,7 @@ def aio_watershed_task(
             towards under-segmentation, while high values bias towards
             over-segmentation. Defaults to 0.6.
 
-    On timelapse input the task runs per timepoint: label IDs are independent
+    On timeseries input the task runs per timepoint: label IDs are independent
     per timepoint, with no correspondence across timepoints.
 
     Returns:

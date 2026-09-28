@@ -84,7 +84,7 @@ def test_image_cropping_multichannel_rejected(napari_raw_czyx):
     assert "multichannel" in out.message
 
 
-def test_image_cropping_multichannel_timelapse_rejected(napari_raw_tczyx):
+def test_image_cropping_multichannel_timeseries_rejected(napari_raw_tczyx):
     ps_image = PanSegImage.from_napari_layer(napari_raw_tczyx)
     rectangle = np.array([[0, 0, 0], [0, 0, 8], [0, 8, 8], [0, 8, 0]])
 

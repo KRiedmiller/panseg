@@ -23,8 +23,8 @@ from panseg.io.h5 import create_h5, read_h5_axis_order, read_h5_time_spacing
 from panseg.io.io import guess_stack_layout
 from panseg.io.voxelsize import VoxelSize
 from tests.conftest import (
-    TIMELAPSE_PROPS_KNOWN_T_SPACING,
-    TIMELAPSE_PROPS_UNKNOWN_T_SPACING,
+    TIMESERIES_PROPS_KNOWN_T_SPACING,
+    TIMESERIES_PROPS_UNKNOWN_T_SPACING,
 )
 
 
@@ -138,7 +138,7 @@ LAYOUT_DERIVED_PROPS = [
         "channel_axis",
         "time_axis",
         "dimensionality",
-        "is_timelapse",
+        "is_timeseries",
         "spatial_axis_indices",
     ),
     LAYOUT_DERIVED_PROPS,
@@ -148,7 +148,7 @@ def test_image_properties_derived_layout_props(
     channel_axis,
     time_axis,
     dimensionality,
-    is_timelapse,
+    is_timeseries,
     spatial_axis_indices,
 ):
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
@@ -162,7 +162,7 @@ def test_image_properties_derived_layout_props(
     assert props.channel_axis == channel_axis
     assert props.time_axis == time_axis
     assert props.dimensionality == dimensionality
-    assert props.is_timelapse is is_timelapse
+    assert props.is_timeseries is is_timeseries
     assert layout.spatial_axis_indices == spatial_axis_indices
 
 
@@ -424,7 +424,7 @@ def test_construction_squeeze_dropping_t_clears_t_spacing():
     )
     image = PanSegImage(data, props)
     assert image.image_layout == ImageLayout.ZYX
-    assert image.is_timelapse is False
+    assert image.is_timeseries is False
     assert image.properties.t_spacing is None
 
 
@@ -595,7 +595,7 @@ def test_scale_tzyx_known_t_spacing():
     data = np.random.rand(7, 5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 2.0), unit="um")
     image_props = ImageProperties(
-        name="timelapse",
+        name="timeseries",
         semantic_type=SemanticType.RAW,
         voxel_size=voxel_size,
         image_layout=ImageLayout.TZYX,
@@ -610,7 +610,7 @@ def test_scale_tzyx_unknown_t_spacing():
     data = np.random.rand(7, 5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 2.0), unit="um")
     image_props = ImageProperties(
-        name="timelapse",
+        name="timeseries",
         semantic_type=SemanticType.RAW,
         voxel_size=voxel_size,
         image_layout=ImageLayout.TZYX,
@@ -624,7 +624,7 @@ def test_scale_tcyx():
     data = np.random.rand(7, 3, 16, 16)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 2.0), unit="um")
     image_props = ImageProperties(
-        name="timelapse",
+        name="timeseries",
         semantic_type=SemanticType.RAW,
         voxel_size=voxel_size,
         image_layout=ImageLayout.TCYX,
@@ -822,7 +822,7 @@ def test_import_image_ome_anchor_single(file_name, layout, shape):
     assert isinstance(image, PanSegImage)
     assert image.image_layout == layout
     assert image.shape == shape
-    assert image.is_timelapse
+    assert image.is_timeseries
     assert image.properties.t_spacing is None
 
 
@@ -848,38 +848,38 @@ def test_import_image_ome_anchor_multichannel():
     ],
 )
 def test_import_image_ome_time_increment_units(
-    make_ome_timelapse, unit, expected_t_spacing
+    make_ome_timeseries, unit, expected_t_spacing
 ):
-    path = make_ome_timelapse(t_increment=500, t_increment_unit=unit)
+    path = make_ome_timeseries(t_increment=500, t_increment_unit=unit)
     image = import_image(path=path, stack_layout="TZYX")
     assert image.image_layout == ImageLayout.TZYX
     assert image.properties.t_spacing == expected_t_spacing
     assert image.properties.t_unit == "s"
 
 
-def test_import_image_ome_uniform_plane_delta_t(make_ome_timelapse):
-    path = make_ome_timelapse(plane_delta_t=1000, plane_delta_t_unit="ms")
+def test_import_image_ome_uniform_plane_delta_t(make_ome_timeseries):
+    path = make_ome_timeseries(plane_delta_t=1000, plane_delta_t_unit="ms")
     image = import_image(path=path, stack_layout="TZYX")
     assert image.properties.t_spacing == 1.0
 
 
-def test_import_image_ome_nonuniform_plane_delta_t_warns_unknown(make_ome_timelapse):
-    path = make_ome_timelapse(nonuniform_plane_delta_t=True)
+def test_import_image_ome_nonuniform_plane_delta_t_warns_unknown(make_ome_timeseries):
+    path = make_ome_timeseries(nonuniform_plane_delta_t=True)
     with pytest.warns(UserWarning, match="DeltaT"):
         image = import_image(path=path, stack_layout="TZYX")
     assert image.image_layout == ImageLayout.TZYX
     assert image.properties.t_spacing is None
 
 
-def test_import_image_ome_absent_timing_metadata_unknown(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_import_image_ome_absent_timing_metadata_unknown(make_ome_timeseries):
+    path = make_ome_timeseries()
     image = import_image(path=path, stack_layout="TZYX")
     assert image.image_layout == ImageLayout.TZYX
     assert image.properties.t_spacing is None
 
 
-def test_import_image_ome_multichannel_keeps_t_spacing(make_ome_timelapse):
-    path = make_ome_timelapse(axes="TCZYX", t_increment=500, t_increment_unit="ms")
+def test_import_image_ome_multichannel_keeps_t_spacing(make_ome_timeseries):
+    path = make_ome_timeseries(axes="TCZYX", t_increment=500, t_increment_unit="ms")
     images = import_image(path=path, stack_layout="TCZYX")
     assert isinstance(images, list)
     assert len(images) == 2
@@ -888,38 +888,38 @@ def test_import_image_ome_multichannel_keeps_t_spacing(make_ome_timelapse):
         assert image.properties.t_spacing == 0.5
 
 
-def test_import_image_ome_t1_imports_squeezed(make_ome_timelapse):
-    path = make_ome_timelapse(axes="TYX", shape=(1, 16, 16))
+def test_import_image_ome_t1_imports_squeezed(make_ome_timeseries):
+    path = make_ome_timeseries(axes="TYX", shape=(1, 16, 16))
     image = import_image(path=path, stack_layout="YX")
     assert image.image_layout == ImageLayout.YX
     assert image.shape == (16, 16)
-    assert not image.is_timelapse
+    assert not image.is_timeseries
 
 
-def test_import_image_ome_multifile_rejected(ome_timelapse_multifile):
-    first, second, _ = ome_timelapse_multifile
+def test_import_image_ome_multifile_rejected(ome_timeseries_multifile):
+    first, second, _ = ome_timeseries_multifile
     with pytest.raises(ValueError, match="Multi-file OME-TIFF"):
         import_image(path=first, stack_layout="TZYX")
 
 
-def test_import_image_tzyx_single(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_import_image_tzyx_single(make_ome_timeseries):
+    path = make_ome_timeseries()
     image = import_image(path=path, stack_layout="TZYX")
     assert isinstance(image, PanSegImage)
     assert image.image_layout == ImageLayout.TZYX
     assert image.shape == (4, 5, 16, 16)
 
 
-def test_import_image_tyx_single(make_ome_timelapse):
-    path = make_ome_timelapse(axes="TYX")
+def test_import_image_tyx_single(make_ome_timeseries):
+    path = make_ome_timeseries(axes="TYX")
     image = import_image(path=path, stack_layout="TYX")
     assert isinstance(image, PanSegImage)
     assert image.image_layout == ImageLayout.TYX
     assert image.shape == (4, 16, 16)
 
 
-def test_import_image_tczyx_splits_channels(make_ome_timelapse):
-    path = make_ome_timelapse(axes="TCZYX")
+def test_import_image_tczyx_splits_channels(make_ome_timeseries):
+    path = make_ome_timeseries(axes="TCZYX")
     images = import_image(path=path, stack_layout="TCZYX")
     assert isinstance(images, list)
     assert len(images) == 2
@@ -929,8 +929,8 @@ def test_import_image_tczyx_splits_channels(make_ome_timelapse):
         assert image.name == f"image_{ch}"
 
 
-def test_import_image_tcyx_splits_channels(make_ome_timelapse):
-    path = make_ome_timelapse(axes="TCYX")
+def test_import_image_tcyx_splits_channels(make_ome_timeseries):
+    path = make_ome_timeseries(axes="TCYX")
     images = import_image(path=path, stack_layout="TCYX")
     assert isinstance(images, list)
     assert len(images) == 2
@@ -939,22 +939,22 @@ def test_import_image_tcyx_splits_channels(make_ome_timelapse):
         assert image.shape == (4, 16, 16)
 
 
-def test_import_image_tzyx_slicing_t_first(make_ome_timelapse):
-    path = make_ome_timelapse(shape=(4, 5, 20, 60))
+def test_import_image_tzyx_slicing_t_first(make_ome_timeseries):
+    path = make_ome_timeseries(shape=(4, 5, 20, 60))
     image = import_image(path=path, stack_layout="TZYX[:3,:,:,:50]")
     assert image.image_layout == ImageLayout.TZYX
     assert image.shape == (3, 5, 20, 50)
 
 
-def test_import_image_tzyx_spatial_slicing(make_ome_timelapse):
-    path = make_ome_timelapse(shape=(4, 5, 20, 60))
+def test_import_image_tzyx_spatial_slicing(make_ome_timeseries):
+    path = make_ome_timeseries(shape=(4, 5, 20, 60))
     image = import_image(path=path, stack_layout="TZYX[:,1:3,10:,10:20]")
     assert image.image_layout == ImageLayout.TZYX
     assert image.shape == (4, 2, 10, 10)
 
 
-def test_import_image_tzyx_length_one_t_slice_squeezes(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_import_image_tzyx_length_one_t_slice_squeezes(make_ome_timeseries):
+    path = make_ome_timeseries()
     image = import_image(path=path, stack_layout="TZYX[:1,:,:,:]")
     assert image.image_layout == ImageLayout.ZYX
     assert image.shape == (5, 16, 16)
@@ -986,7 +986,7 @@ def test_split_stack_layout_rejects_unknown_axis_letter():
 def test_import_image_inline_slice_uses_user_layout_order(tmp_path):
     """Entry 0 belongs to the first letter of the layout as written (z here),
     not to the first letter of the canonical TZYX it is sorted into."""
-    path = tmp_path / "non_canonical_timelapse.h5"
+    path = tmp_path / "non_canonical_timeseries.h5"
     create_h5(path, np.zeros((6, 3, 8, 8), dtype="float32"), "raw", VoxelSize())
 
     image = import_image(path=path, key="raw", stack_layout="ztyx[:2,:,:,:]")
@@ -996,7 +996,7 @@ def test_import_image_inline_slice_uses_user_layout_order(tmp_path):
 
 def test_import_image_inline_slice_leaves_unlisted_axes_whole(tmp_path):
     """Fewer entries than axes: only t, x and y are indexed, z stays whole."""
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.zeros((3, 64, 64, 5), dtype="float32"), "raw", VoxelSize())
 
     image = import_image(path=path, key="raw", stack_layout="txyz[:2,:,:]")
@@ -1005,7 +1005,7 @@ def test_import_image_inline_slice_leaves_unlisted_axes_whole(tmp_path):
 
 
 def test_import_image_inline_slice_integer_drops_axis(tmp_path):
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.zeros((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
 
     image = import_image(path=path, key="raw", stack_layout="tzyx[0,:,:,:]")
@@ -1015,7 +1015,7 @@ def test_import_image_inline_slice_integer_drops_axis(tmp_path):
 
 
 def test_import_image_inline_slice_with_step(tmp_path):
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.zeros((6, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
 
     image = import_image(path=path, key="raw", stack_layout="tzyx[0:6:2,:,:,:]")
@@ -1024,7 +1024,7 @@ def test_import_image_inline_slice_with_step(tmp_path):
 
 
 def test_import_image_rejects_more_slice_entries_than_axes(tmp_path):
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.zeros((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
 
     with pytest.raises(ValueError, match="entries but the stack layout"):
@@ -1043,7 +1043,7 @@ def test_import_image_t_layout_non_ome_stays_unknown(tmp_path):
     """T layouts are accepted for every format: the layout is the user's
     explicit assertion about their data; the spacing stays unknown for
     formats that cannot carry it."""
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
 
     image = import_image(path=path, key="raw", stack_layout="TZYX")
@@ -1055,7 +1055,7 @@ def test_import_image_t_layout_non_ome_stays_unknown(tmp_path):
 
 
 def test_import_image_tczyx_non_ome_splits_channels(tmp_path):
-    path = tmp_path / "multichannel_timelapse.h5"
+    path = tmp_path / "multichannel_timeseries.h5"
     create_h5(path, np.empty((4, 2, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
 
     images = import_image(path=path, key="raw", stack_layout="TCZYX")
@@ -1145,7 +1145,7 @@ def test_split_image_TCZYX():
     assert len(splits) == 3
     assert [s.name for s in splits] == ["image_0", "image_1", "image_2"]
     assert all([s.image_layout == ImageLayout.TZYX for s in splits])
-    assert all([s.is_timelapse for s in splits])
+    assert all([s.is_timeseries for s in splits])
     assert all([s.shape == (7, 5, 16, 16) for s in splits])
     assert all([s.properties.t_spacing == 0.5 for s in splits])
 
@@ -1167,7 +1167,7 @@ def test_split_image_TCYX():
     assert len(splits) == 4
     assert [s.name for s in splits] == ["image_0", "image_1", "image_2", "image_3"]
     assert all([s.image_layout == ImageLayout.TYX for s in splits])
-    assert all([s.is_timelapse for s in splits])
+    assert all([s.is_timeseries for s in splits])
     assert all([s.shape == (7, 16, 16) for s in splits])
     assert all([s.properties.t_spacing == 0.5 for s in splits])
 
@@ -1278,7 +1278,7 @@ def test_merge_images_3dc():
     assert merged.shape == (5, 9, 10, 11)
 
 
-def test_merge_timelapse_matching_t_spacing():
+def test_merge_timeseries_matching_t_spacing():
     data = np.random.rand(7, 5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     image_props = ImageProperties(
@@ -1294,7 +1294,7 @@ def test_merge_timelapse_matching_t_spacing():
 
     merged = ps_image_1.merge_with(ps_image_2)
     assert merged.image_layout == ImageLayout.TCZYX
-    assert merged.is_timelapse
+    assert merged.is_timeseries
     # The channel axis sits at index 1, after T.
     assert merged.shape == (7, 2, 5, 16, 16)
     assert merged.properties.t_spacing == 10.0
@@ -1304,7 +1304,7 @@ def test_merge_timelapse_matching_t_spacing():
     assert all([s.shape == (7, 5, 16, 16) for s in splits])
 
 
-def test_merge_timelapse_2d():
+def test_merge_timeseries_2d():
     data = np.random.rand(7, 16, 16)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     image_props = ImageProperties(
@@ -1320,12 +1320,12 @@ def test_merge_timelapse_2d():
 
     merged = ps_image_1.merge_with(ps_image_2)
     assert merged.image_layout == ImageLayout.TCYX
-    assert merged.is_timelapse
+    assert merged.is_timeseries
     assert merged.shape == (7, 2, 16, 16)
     assert merged.properties.t_spacing == 5.0
 
 
-def test_merge_timelapse_mismatched_t_spacing():
+def test_merge_timeseries_mismatched_t_spacing():
     data = np.random.rand(7, 5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     image_props_1 = ImageProperties(
@@ -1351,7 +1351,7 @@ def test_merge_timelapse_mismatched_t_spacing():
         ps_image_1.merge_with(ps_image_2)
 
 
-def test_merge_timelapse_set_vs_unknown_t_spacing():
+def test_merge_timeseries_set_vs_unknown_t_spacing():
     data = np.random.rand(7, 5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     image_props_known = ImageProperties(
@@ -1376,7 +1376,7 @@ def test_merge_timelapse_set_vs_unknown_t_spacing():
         ps_image_1.merge_with(ps_image_2)
 
 
-def test_merge_timelapse_both_unknown_t_spacing():
+def test_merge_timeseries_both_unknown_t_spacing():
     data = np.random.rand(7, 5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     image_props = ImageProperties(
@@ -1395,11 +1395,11 @@ def test_merge_timelapse_both_unknown_t_spacing():
     assert merged.properties.t_spacing is None
 
 
-def test_merge_timelapse_vs_still():
+def test_merge_timeseries_vs_still():
     data_3d = np.random.rand(7, 5, 16, 16)
     data_still = np.random.rand(5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    timelapse_props = ImageProperties(
+    timeseries_props = ImageProperties(
         name="image",
         semantic_type=SemanticType.RAW,
         voxel_size=voxel_size,
@@ -1413,11 +1413,11 @@ def test_merge_timelapse_vs_still():
         image_layout=ImageLayout.ZYX,
         original_voxel_size=voxel_size,
     )
-    ps_timelapse = PanSegImage(data_3d, timelapse_props)
+    ps_timeseries = PanSegImage(data_3d, timeseries_props)
     ps_still = PanSegImage(data_still, still_props)
 
     with pytest.raises(ValueError):
-        ps_timelapse.merge_with(ps_still)
+        ps_timeseries.merge_with(ps_still)
 
 
 def test_merge_images_wrong_semantic():
@@ -1501,11 +1501,11 @@ def test_image_properties_json_old_format():
     assert loaded.t_unit == "s"
 
 
-def test_napari_layer_roundtrip_timelapse():
+def test_napari_layer_roundtrip_timeseries():
     data = np.random.rand(7, 3, 5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 2.0), unit="um")
     image_props = ImageProperties(
-        name="timelapse",
+        name="timeseries",
         semantic_type=SemanticType.RAW,
         voxel_size=voxel_size,
         image_layout=ImageLayout.TCZYX,
@@ -1686,26 +1686,26 @@ def test_stack_sort_2dc_invX():
     assert np.all(n_data[:, :, ::-1] == data)
 
 
-# Shared timelapse fixtures: one raw float32 array per T layout on the
+# Shared timeseries fixtures: one raw float32 array per T layout on the
 # documented shape skeleton, plus a uint16 segmentation whose label IDs are
 # independent across timepoints by construction.
-TIMELAPSE_RAW_FIXTURES = [
-    pytest.param("timelapse_tyx", ImageLayout.TYX, (4, 16, 16), id="TYX"),
-    pytest.param("timelapse_tcyx", ImageLayout.TCYX, (4, 2, 16, 16), id="TCYX"),
-    pytest.param("timelapse_tzyx", ImageLayout.TZYX, (4, 5, 16, 16), id="TZYX"),
-    pytest.param("timelapse_tczyx", ImageLayout.TCZYX, (4, 2, 5, 16, 16), id="TCZYX"),
+TIMESERIES_RAW_FIXTURES = [
+    pytest.param("timeseries_tyx", ImageLayout.TYX, (4, 16, 16), id="TYX"),
+    pytest.param("timeseries_tcyx", ImageLayout.TCYX, (4, 2, 16, 16), id="TCYX"),
+    pytest.param("timeseries_tzyx", ImageLayout.TZYX, (4, 5, 16, 16), id="TZYX"),
+    pytest.param("timeseries_tczyx", ImageLayout.TCZYX, (4, 2, 5, 16, 16), id="TCZYX"),
 ]
 
 
-@pytest.mark.parametrize("fixture_name, layout, shape", TIMELAPSE_RAW_FIXTURES)
-def test_timelapse_raw_fixture(request, fixture_name, layout, shape):
+@pytest.mark.parametrize("fixture_name, layout, shape", TIMESERIES_RAW_FIXTURES)
+def test_timeseries_raw_fixture(request, fixture_name, layout, shape):
     data = request.getfixturevalue(fixture_name)
     assert data.shape == shape
     assert data.dtype == np.float32
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     for t_props, expected_t_spacing in (
-        (TIMELAPSE_PROPS_KNOWN_T_SPACING, 10.0),
-        (TIMELAPSE_PROPS_UNKNOWN_T_SPACING, None),
+        (TIMESERIES_PROPS_KNOWN_T_SPACING, 10.0),
+        (TIMESERIES_PROPS_UNKNOWN_T_SPACING, None),
     ):
         props = ImageProperties(
             name=fixture_name,
@@ -1717,13 +1717,13 @@ def test_timelapse_raw_fixture(request, fixture_name, layout, shape):
         )
         image = PanSegImage(data, props)
         assert image.image_layout == layout
-        assert image.is_timelapse
+        assert image.is_timeseries
         assert image.shape == shape
         assert image.properties.t_spacing == expected_t_spacing
 
 
-def test_timelapse_segmentation_fixture(timelapse_segmentation):
-    seg = timelapse_segmentation
+def test_timeseries_segmentation_fixture(timeseries_segmentation):
+    seg = timeseries_segmentation
     assert seg.shape == (4, 5, 16, 16)
     assert seg.dtype == np.uint16
     # Label IDs are independent across timepoints: no ID shared by two t.
@@ -1734,11 +1734,11 @@ def test_timelapse_segmentation_fixture(timelapse_segmentation):
             assert not label_sets[i] & label_sets[j]
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     for t_props, expected_t_spacing in (
-        (TIMELAPSE_PROPS_KNOWN_T_SPACING, 10.0),
-        (TIMELAPSE_PROPS_UNKNOWN_T_SPACING, None),
+        (TIMESERIES_PROPS_KNOWN_T_SPACING, 10.0),
+        (TIMESERIES_PROPS_UNKNOWN_T_SPACING, None),
     ):
         props = ImageProperties(
-            name="timelapse_segmentation",
+            name="timeseries_segmentation",
             semantic_type=SemanticType.SEGMENTATION,
             voxel_size=voxel_size,
             image_layout=ImageLayout.TZYX,
@@ -1755,12 +1755,12 @@ def test_timelapse_segmentation_fixture(timelapse_segmentation):
 # save_image/import_image with layout and t_spacing preserved. ---
 
 
-def _timelapse_ps_image(data, layout, t_spacing=None):
+def _timeseries_ps_image(data, layout, t_spacing=None):
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.15), unit="um")
     return PanSegImage(
         data=data,
         properties=ImageProperties(
-            name="timelapse",
+            name="timeseries",
             semantic_type=SemanticType.SEGMENTATION,
             voxel_size=voxel_size,
             image_layout=ImageLayout(layout),
@@ -1780,14 +1780,14 @@ def _timelapse_ps_image(data, layout, t_spacing=None):
     ],
 )
 @pytest.mark.parametrize("export_format", ["tiff", "h5", "zarr"])
-def test_save_image_timelapse_roundtrip(
-    tmp_path, timelapse_segmentation, layout, t_spacing, export_format
+def test_save_image_timeseries_roundtrip(
+    tmp_path, timeseries_segmentation, layout, t_spacing, export_format
 ):
     if layout == "TYX":
-        data = timelapse_segmentation[:, 0]
+        data = timeseries_segmentation[:, 0]
     else:
-        data = timelapse_segmentation
-    image = _timelapse_ps_image(data, layout, t_spacing=t_spacing)
+        data = timeseries_segmentation
+    image = _timeseries_ps_image(data, layout, t_spacing=t_spacing)
     save_image(
         image,
         tmp_path,
@@ -1846,8 +1846,8 @@ def test_save_image_h5_writes_axis_order_on_every_export(tmp_path):
     assert read_h5_time_spacing(out, key="segmentation") == (None, "s")
 
 
-def test_to_h5_writes_axis_order_and_time_attrs(tmp_path, timelapse_segmentation):
-    image = _timelapse_ps_image(timelapse_segmentation, "TZYX", t_spacing=10.0)
+def test_to_h5_writes_axis_order_and_time_attrs(tmp_path, timeseries_segmentation):
+    image = _timeseries_ps_image(timeseries_segmentation, "TZYX", t_spacing=10.0)
     out = tmp_path / "out.h5"
     image.to_h5(out, "segmentation")
     assert read_h5_axis_order(out, key="segmentation") == "TZYX"
@@ -1858,10 +1858,10 @@ def test_to_h5_writes_axis_order_and_time_attrs(tmp_path, timelapse_segmentation
 
 
 @pytest.mark.parametrize("export_format", ["jpg", "png"])
-def test_save_image_timelapse_rejects_pil_formats(
-    tmp_path, timelapse_segmentation, export_format
+def test_save_image_timeseries_rejects_pil_formats(
+    tmp_path, timeseries_segmentation, export_format
 ):
-    image = _timelapse_ps_image(timelapse_segmentation, "TZYX", t_spacing=10.0)
+    image = _timeseries_ps_image(timeseries_segmentation, "TZYX", t_spacing=10.0)
     with pytest.raises(
         ValueError, match=f"Export format {export_format} not recognized"
     ):

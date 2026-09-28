@@ -224,11 +224,11 @@ def test_label_io_round_trip(tmp_path, shape, layout, export_format):
     assert image.image_layout == imported_image.image_layout
 
 
-def test_import_image_task_t_layout(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_import_image_task_t_layout(make_ome_timeseries):
+    path = make_ome_timeseries()
     image = import_image_task(
         input_path=path,
-        image_name="timelapse",
+        image_name="timeseries",
         semantic_type="raw",
         stack_layout="TZYX",
     )
@@ -238,11 +238,11 @@ def test_import_image_task_t_layout(make_ome_timelapse):
     assert image.properties.t_spacing is None
 
 
-def test_import_image_task_tczyx_splits_channels(make_ome_timelapse):
-    path = make_ome_timelapse(axes="TCZYX")
+def test_import_image_task_tczyx_splits_channels(make_ome_timeseries):
+    path = make_ome_timeseries(axes="TCZYX")
     images = import_image_task(
         input_path=path,
-        image_name="timelapse",
+        image_name="timeseries",
         semantic_type="raw",
         stack_layout="TCZYX",
     )
@@ -251,11 +251,11 @@ def test_import_image_task_tczyx_splits_channels(make_ome_timelapse):
     assert all(i.image_layout == ImageLayout.TZYX for i in images)
 
 
-def test_import_image_task_t_layout_rejects_mismatched_shape(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_import_image_task_t_layout_rejects_mismatched_shape(make_ome_timeseries):
+    path = make_ome_timeseries()
     result = import_image_task(
         input_path=path,
-        image_name="timelapse",
+        image_name="timeseries",
         semantic_type="raw",
         stack_layout="ZYX",
     )
@@ -263,11 +263,11 @@ def test_import_image_task_t_layout_rejects_mismatched_shape(make_ome_timelapse)
     assert "incompatible with chosen layout" in result.message
 
 
-def test_import_image_task_inline_slice_t_first(make_ome_timelapse):
-    path = make_ome_timelapse(shape=(4, 5, 20, 60))
+def test_import_image_task_inline_slice_t_first(make_ome_timeseries):
+    path = make_ome_timeseries(shape=(4, 5, 20, 60))
     image = import_image_task(
         input_path=path,
-        image_name="timelapse",
+        image_name="timeseries",
         semantic_type="raw",
         stack_layout="TZYX[:3,:,:,:50]",
     )
@@ -276,11 +276,11 @@ def test_import_image_task_inline_slice_t_first(make_ome_timelapse):
     assert image.shape == (3, 5, 20, 50)
 
 
-def test_import_image_task_length_one_t_slice_squeezes(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_import_image_task_length_one_t_slice_squeezes(make_ome_timeseries):
+    path = make_ome_timeseries()
     image = import_image_task(
         input_path=path,
-        image_name="timelapse",
+        image_name="timeseries",
         semantic_type="raw",
         stack_layout="TZYX[:1,:,:,:]",
     )
@@ -289,11 +289,11 @@ def test_import_image_task_length_one_t_slice_squeezes(make_ome_timelapse):
     assert image.properties.t_spacing is None
 
 
-def test_import_image_task_inline_slicing(make_ome_timelapse):
-    path = make_ome_timelapse(shape=(4, 5, 20, 60))
+def test_import_image_task_inline_slicing(make_ome_timeseries):
+    path = make_ome_timeseries(shape=(4, 5, 20, 60))
     image = import_image_task(
         input_path=path,
-        image_name="timelapse",
+        image_name="timeseries",
         semantic_type="raw",
         stack_layout="tzyx[:3,:,:,:50]",
     )
@@ -302,11 +302,11 @@ def test_import_image_task_inline_slicing(make_ome_timelapse):
     assert image.shape == (3, 5, 20, 50)
 
 
-def test_import_image_task_inline_slice_integer_drops_time(make_ome_timelapse):
-    path = make_ome_timelapse()
+def test_import_image_task_inline_slice_integer_drops_time(make_ome_timeseries):
+    path = make_ome_timeseries()
     image = import_image_task(
         input_path=path,
-        image_name="timelapse",
+        image_name="timeseries",
         semantic_type="raw",
         stack_layout="TZYX[0,:,:,:]",
     )
@@ -387,11 +387,11 @@ def test_label_io_mesh_error(tmp_path):
     assert "Mesh export only supported for 3D" in out.message
 
 
-# --- Time-aware mesh export (ticket 14): a 3D timelapse segmentation writes
+# --- Time-aware mesh export (ticket 14): a 3D timeseries segmentation writes
 # one mesh file per timepoint, empty timepoints included. ---
 
 
-def _timelapse_mesh_image(seg):
+def _timeseries_mesh_image(seg):
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     return PanSegImage(
         data=seg,
@@ -407,12 +407,12 @@ def _timelapse_mesh_image(seg):
 
 
 @pytest.mark.parametrize("export_mesh", ["glb", "obj", "ply"])
-def test_export_mesh_timelapse_one_file_per_timepoint(
-    tmp_path, timelapse_segmentation, export_mesh
+def test_export_mesh_timeseries_one_file_per_timepoint(
+    tmp_path, timeseries_segmentation, export_mesh
 ):
-    seg = timelapse_segmentation.copy()
+    seg = timeseries_segmentation.copy()
     seg[1] = 0  # an empty timepoint still gets its file
-    image = _timelapse_mesh_image(seg)
+    image = _timeseries_mesh_image(seg)
 
     export_image_task(
         image=image,
@@ -442,10 +442,10 @@ def test_export_mesh_timelapse_one_file_per_timepoint(
             assert not loaded.is_empty
 
 
-def test_export_mesh_still_3d_single_file(tmp_path, timelapse_segmentation):
+def test_export_mesh_still_3d_single_file(tmp_path, timeseries_segmentation):
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
     image = PanSegImage(
-        data=timelapse_segmentation[0],
+        data=timeseries_segmentation[0],
         properties=ImageProperties(
             name="seg",
             semantic_type=SemanticType.SEGMENTATION,

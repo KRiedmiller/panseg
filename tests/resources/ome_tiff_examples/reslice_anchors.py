@@ -1,4 +1,4 @@
-"""One-off script that regenerates the committed OME-TIFF timelapse test anchors.
+"""One-off script that regenerates the committed OME-TIFF timeseries test anchors.
 
 Input:  ``ome_tiff_examples.tar.xz`` — The Open Microscopy Environment sample
         set (see ``LICENSE.md``), containing at least ``time-series.ome.tif``,

@@ -239,7 +239,7 @@ def test_guess_stack_layout_h5_axis_order(tmp_path):
 
 
 def test_guess_stack_layout_h5_old_file_shape_heuristic(tmp_path):
-    path = tmp_path / "timelapse.h5"
+    path = tmp_path / "timeseries.h5"
     create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
     assert guess_stack_layout(path, key="raw") == ""
 
@@ -258,7 +258,7 @@ def test_guess_stack_layout_zarr_axis_order(tmp_path):
 
 
 def test_guess_stack_layout_zarr_old_file_shape_heuristic(tmp_path):
-    path = tmp_path / "timelapse.zarr"
+    path = tmp_path / "timeseries.zarr"
     create_zarr(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
     assert guess_stack_layout(path, key="raw") == ""
 

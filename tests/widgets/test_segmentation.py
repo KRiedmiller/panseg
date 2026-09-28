@@ -335,10 +335,10 @@ def test_on_prediction_change_zyx_shows_stacked(segmentation_tab, napari_predict
 
 
 def test_on_prediction_change_tzyx_shows_stacked_no_log(
-    segmentation_tab, mocker, napari_timelapse_prediction
+    segmentation_tab, mocker, napari_timeseries_prediction
 ):
     mocked_log = mocker.patch("panseg.viewer_napari.widgets.segmentation.log")
-    segmentation_tab._on_prediction_change(napari_timelapse_prediction)
+    segmentation_tab._on_prediction_change(napari_timeseries_prediction)
 
     # TZYX behaves as 3D: the stacked mode is shown
     assert segmentation_tab.widget_dt_ws.stacked.native.isHidden() is False

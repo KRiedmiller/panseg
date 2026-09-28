@@ -378,7 +378,7 @@ def create_tiff(
     else:
         raise ValueError(f"Layout {layout} not supported")
 
-    is_timelapse = "T" in layout
+    is_timeseries = "T" in layout
 
     if voxel_size.voxels_size is not None:
         assert len(voxel_size.voxels_size) == 3, (
@@ -392,7 +392,7 @@ def create_tiff(
     # Save output results as tiff
 
     use_bigtiff = stack.nbytes > 4294967295 or force_bigtiff
-    if is_timelapse or use_bigtiff:
+    if is_timeseries or use_bigtiff:
         # OME-XML (unlike the shaped-JSON format) does not read `spacing`/`unit`
         # metadata keys and rejects the 6-D TZCYXS reshape, so write the logical
         # stack with explicit PhysicalSize* attributes to keep the voxel size.
@@ -405,7 +405,7 @@ def create_tiff(
             "PhysicalSizeZ": spacing,
             "PhysicalSizeZUnit": voxel_size.unit,
         }
-        if is_timelapse and t_spacing is not None:
+        if is_timeseries and t_spacing is not None:
             # the time spacing is canonical seconds
             ome_metadata["TimeIncrement"] = t_spacing
             ome_metadata["TimeIncrementUnit"] = "s"

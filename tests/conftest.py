@@ -68,7 +68,7 @@ def napari_raw_4d():
 
 
 @pytest.fixture
-def napari_timelapse():
+def napari_timeseries():
     data = np.random.rand(4, 5, 16, 16).astype("float32")
     voxel_size = (1.0, 1.0, 1.0)
     metadata = {
@@ -80,11 +80,11 @@ def napari_timelapse():
         "t_unit": "s",
         "id": uuid4(),
     }
-    return Image(data, metadata=metadata, name="test_timelapse")
+    return Image(data, metadata=metadata, name="test_timeseries")
 
 
 @pytest.fixture
-def napari_timelapse_unknown_t_spacing():
+def napari_timeseries_unknown_t_spacing():
     data = np.random.rand(4, 5, 16, 16).astype("float32")
     voxel_size = (1.0, 1.0, 1.0)
     metadata = {
@@ -96,7 +96,7 @@ def napari_timelapse_unknown_t_spacing():
         "t_unit": "s",
         "id": uuid4(),
     }
-    return Image(data, metadata=metadata, name="test_timelapse_unknown")
+    return Image(data, metadata=metadata, name="test_timeseries_unknown")
 
 
 @pytest.fixture
@@ -309,46 +309,46 @@ def h5_file():
     return TEST_FILES / "sample_ovule.h5"
 
 
-# --- Timelapse fixtures (time-dimension spec) ---
+# --- Time fixtures (time-dimension spec) ---
 #
-# Synthetic raw timelapses on one shape skeleton: T=4, C=2, Z=5, Y=X=16.
+# Synthetic raw timeseriess on one shape skeleton: T=4, C=2, Z=5, Y=X=16.
 # Tests build PanSegImage inline from these arrays; known-vs-unknown
 # t_spacing are the two property dicts below, not separate fixtures.
 
-TIMELAPSE_PROPS_KNOWN_T_SPACING = {"t_spacing": 10.0, "t_unit": "s"}
-TIMELAPSE_PROPS_UNKNOWN_T_SPACING = {"t_spacing": None}
+TIMESERIES_PROPS_KNOWN_T_SPACING = {"t_spacing": 10.0, "t_unit": "s"}
+TIMESERIES_PROPS_UNKNOWN_T_SPACING = {"t_spacing": None}
 
 
-def _timelapse_raw(shape: tuple[int, ...], seed: int) -> np.ndarray:
+def _timeseries_raw(shape: tuple[int, ...], seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
     return rng.random(shape).astype("float32")
 
 
 @pytest.fixture
-def timelapse_tyx() -> np.ndarray:
-    """Raw TYX float32 timelapse, shape (4, 16, 16)."""
-    return _timelapse_raw((4, 16, 16), seed=11)
+def timeseries_tyx() -> np.ndarray:
+    """Raw TYX float32 timeseries, shape (4, 16, 16)."""
+    return _timeseries_raw((4, 16, 16), seed=11)
 
 
 @pytest.fixture
-def timelapse_tcyx() -> np.ndarray:
-    """Raw TCYX float32 timelapse, shape (4, 2, 16, 16)."""
-    return _timelapse_raw((4, 2, 16, 16), seed=12)
+def timeseries_tcyx() -> np.ndarray:
+    """Raw TCYX float32 timeseries, shape (4, 2, 16, 16)."""
+    return _timeseries_raw((4, 2, 16, 16), seed=12)
 
 
 @pytest.fixture
-def timelapse_tzyx() -> np.ndarray:
-    """Raw TZYX float32 timelapse, shape (4, 5, 16, 16)."""
-    return _timelapse_raw((4, 5, 16, 16), seed=13)
+def timeseries_tzyx() -> np.ndarray:
+    """Raw TZYX float32 timeseries, shape (4, 5, 16, 16)."""
+    return _timeseries_raw((4, 5, 16, 16), seed=13)
 
 
 @pytest.fixture
-def timelapse_tczyx() -> np.ndarray:
-    """Raw TCZYX float32 timelapse, shape (4, 2, 5, 16, 16)."""
-    return _timelapse_raw((4, 2, 5, 16, 16), seed=14)
+def timeseries_tczyx() -> np.ndarray:
+    """Raw TCZYX float32 timeseries, shape (4, 2, 5, 16, 16)."""
+    return _timeseries_raw((4, 2, 5, 16, 16), seed=14)
 
 
-def _timelapse_segmentation() -> np.ndarray:
+def _timeseries_segmentation() -> np.ndarray:
     """uint16 TZYX segmentation, shape (4, 5, 16, 16).
 
     Label IDs are independent across timepoints by construction: timepoint
@@ -371,12 +371,12 @@ def _timelapse_segmentation() -> np.ndarray:
 
 
 @pytest.fixture
-def timelapse_segmentation() -> np.ndarray:
-    """uint16 TZYX segmentation timelapse; label IDs are independent across timepoints."""
-    return _timelapse_segmentation()
+def timeseries_segmentation() -> np.ndarray:
+    """uint16 TZYX segmentation timeseries; label IDs are independent across timepoints."""
+    return _timeseries_segmentation()
 
 
-def _timelapse_labels_data() -> np.ndarray:
+def _timeseries_labels_data() -> np.ndarray:
     """Deterministic uint16 TZYX labels, shape (3, 4, 10, 10).
 
     Label IDs are disjoint per timepoint and the positions are fixed, so
@@ -413,7 +413,7 @@ def _napari_image_layer(
     return Image(data, metadata=metadata, name=name)
 
 
-def _timelapse_labels_layer(data: np.ndarray, name: str, image_layout: str) -> Labels:
+def _timeseries_labels_layer(data: np.ndarray, name: str, image_layout: str) -> Labels:
     voxel_size = (1.0, 1.0, 1.0)
     metadata = {
         "semantic_type": SemanticType.SEGMENTATION,
@@ -428,25 +428,25 @@ def _timelapse_labels_layer(data: np.ndarray, name: str, image_layout: str) -> L
 
 
 @pytest.fixture
-def napari_timelapse_segmentation() -> Labels:
+def napari_timeseries_segmentation() -> Labels:
     """Labels napari layer, TZYX layout, deterministic per-timepoint label IDs."""
-    return _timelapse_labels_layer(
-        _timelapse_labels_data(), "test_segmentation_timelapse", "TZYX"
+    return _timeseries_labels_layer(
+        _timeseries_labels_data(), "test_segmentation_timeseries", "TZYX"
     )
 
 
 @pytest.fixture
-def napari_timelapse_segmentation_2d() -> Labels:
+def napari_timeseries_segmentation_2d() -> Labels:
     """Labels napari layer, TYX layout, deterministic per-timepoint label IDs."""
-    data = _timelapse_labels_data().max(axis=1)
+    data = _timeseries_labels_data().max(axis=1)
     data[1, 5:7, 0:2] = 4
     data[2, 5:7, 5:7] = 6
-    return _timelapse_labels_layer(data, "test_segmentation_timelapse_2d", "TYX")
+    return _timeseries_labels_layer(data, "test_segmentation_timeseries_2d", "TYX")
 
 
 @pytest.fixture
-def napari_timelapse_prediction() -> Image:
-    """PREDICTION napari layer, TZYX layout, matching the deterministic timelapse labels shape."""
+def napari_timeseries_prediction() -> Image:
+    """PREDICTION napari layer, TZYX layout, matching the deterministic timeseries labels shape."""
     data = np.random.default_rng(16).random((3, 4, 10, 10)).astype("float32")
     voxel_size = (1.0, 1.0, 1.0)
     metadata = {
@@ -458,7 +458,7 @@ def napari_timelapse_prediction() -> Image:
         "t_unit": "s",
         "id": uuid4(),
     }
-    return Image(data, metadata=metadata, name="test_prediction_timelapse")
+    return Image(data, metadata=metadata, name="test_prediction_timeseries")
 
 
 @pytest.fixture
@@ -526,15 +526,15 @@ _OME_XML_NS = "http://www.openmicroscopy.org/Schemas/OME/2016-06"
 
 # The shared shape skeleton (T, C, Z, Y, X); each layout is the projection of
 # the canonical order onto its present axes.
-TIMELAPSE_SHAPE_SKELETON = (4, 2, 5, 16, 16)
+TIMESERIES_SHAPE_SKELETON = (4, 2, 5, 16, 16)
 
-_TIMELAPSE_OME_SHAPES: dict[str, tuple[int, ...]] = {
-    axes: tuple(n for ax, n in zip("TCZYX", TIMELAPSE_SHAPE_SKELETON) if ax in axes)
+_TIMESERIES_OME_SHAPES: dict[str, tuple[int, ...]] = {
+    axes: tuple(n for ax, n in zip("TCZYX", TIMESERIES_SHAPE_SKELETON) if ax in axes)
     for axes in ("TYX", "TCYX", "TZYX", "TCZYX")
 }
 
 
-def _write_ome_timelapse(
+def _write_ome_timeseries(
     path: Path,
     axes: str,
     shape: tuple[int, ...],
@@ -572,8 +572,8 @@ def _plane_delta_t_sequence(
 
 
 @pytest.fixture
-def make_ome_timelapse(tmp_path):
-    """Factory for synthetic OME-TIFF timelapses written into tmp_path.
+def make_ome_timeseries(tmp_path):
+    """Factory for synthetic OME-TIFF timeseriess written into tmp_path.
 
     Defaults to the TZYX slice of the shared shape skeleton. ``t_increment``
     writes the Pixels TimeIncrement/TimeIncrementUnit attributes;
@@ -596,7 +596,7 @@ def make_ome_timelapse(tmp_path):
         nonlocal counter
         counter += 1
         if shape is None:
-            shape = _TIMELAPSE_OME_SHAPES[axes]
+            shape = _TIMESERIES_OME_SHAPES[axes]
         assert len(shape) == len(axes)
         if nonuniform_plane_delta_t:
             per_timepoint = [1000 * (i + 1) for i in range(shape[axes.index("T")])]
@@ -605,7 +605,7 @@ def make_ome_timelapse(tmp_path):
             sequence = [plane_delta_t] * int(np.prod(shape[:-2]))
         else:
             sequence = None
-        return _write_ome_timelapse(
+        return _write_ome_timeseries(
             tmp_path / f"synthetic_ome_{counter}.ome.tif",
             axes,
             shape,
@@ -636,9 +636,9 @@ def _save_ome_description(path: Path, root: ElementTree.Element) -> None:
 def _ome_multifile_chain(tmp_path: Path) -> tuple[Path, Path, np.ndarray]:
     """Two-file OME-TIFF UUID/FileName chain.
 
-    A 4-timepoint TZYX timelapse (T=4, Z=2, Y=X=16) is split 2+2 across two
+    A 4-timepoint TZYX timeseries (T=4, Z=2, Y=X=16) is split 2+2 across two
     files. The first file's OME-XML is patched to describe the full
-    timelapse: its TiffData entry gains a UUID child naming the first file,
+    timeseries: its TiffData entry gains a UUID child naming the first file,
     and a second TiffData entry (FirstT=2) is appended whose UUID child
     names the second file. The second file stays a plain 2-timepoint
     OME-TIFF.
@@ -688,9 +688,9 @@ def _ome_multifile_chain(tmp_path: Path) -> tuple[Path, Path, np.ndarray]:
 
 
 @pytest.fixture
-def ome_timelapse_multifile(tmp_path):
+def ome_timeseries_multifile(tmp_path):
     """Two-file OME-TIFF UUID/FileName chain (see ``_ome_multifile_chain``).
 
-    Returns (first_path, second_path, full_timelapse_data).
+    Returns (first_path, second_path, full_timeseries_data).
     """
     return _ome_multifile_chain(tmp_path)

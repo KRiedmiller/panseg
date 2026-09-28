@@ -31,7 +31,7 @@ def import_image_task(
         input_path (Path): path to the image file
         semantic_type (str): semantic type of the image (raw, segmentation, prediction)
         stack_layout (str): stack layout of the image (YX, CYX, ZYX, CZYX or ZCYX,
-            or a timelapse layout TYX, TCYX, TZYX or TCZYX), optionally followed
+            or a timeseries layout TYX, TCYX, TZYX or TCZYX), optionally followed
             by a slice to truncate before importing, e.g. "TZYX[:3,:,:,:]"
         image_name (str): name of the image, if None the name will be the same as the file name
         key (str | None): key for the image (used only for h5 and zarr formats)

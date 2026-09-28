@@ -1,4 +1,4 @@
-"""End-to-end headless run of the spec's complete example timelapse workflow.
+"""End-to-end headless run of the spec's complete example timeseries workflow.
 
 The committed resliced OME-TIFF anchor (TZYX, 32x32 frames, too small for a
 real U-Net patch) goes through import -> set_t_spacing -> gaussian ->
@@ -30,7 +30,7 @@ def _mock_unet_prediction(raw: np.ndarray, **kwargs) -> np.ndarray:
     return pmap
 
 
-def _example_timelapse_config(tmp_path: Path) -> Path:
+def _example_timeseries_config(tmp_path: Path) -> Path:
     with open(EXAMPLE_WORKFLOW_YAML, "r") as f:
         config = yaml.safe_load(f)
 
@@ -38,18 +38,18 @@ def _example_timelapse_config(tmp_path: Path) -> Path:
     config["inputs"]["input_path"] = str(RESLICED_TZYX_ANCHOR)
     config["inputs"]["export_directory"] = str(tmp_path / "output")
 
-    workflow_path = tmp_path / "example_timelapse_workflow.yaml"
+    workflow_path = tmp_path / "example_timeseries_workflow.yaml"
     with open(workflow_path, "w") as f:
         yaml.safe_dump(config, f)
     return workflow_path
 
 
-def test_example_timelapse_workflow_runs_headless(mocker, tmp_path: Path):
+def test_example_timeseries_workflow_runs_headless(mocker, tmp_path: Path):
     mocker.patch(
         "panseg.tasks.prediction_tasks.unet_prediction",
         side_effect=_mock_unet_prediction,
     )
-    workflow_path = _example_timelapse_config(tmp_path)
+    workflow_path = _example_timeseries_config(tmp_path)
 
     run_headless_workflow(workflow_path)
 

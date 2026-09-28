@@ -318,7 +318,7 @@ class Preprocessing_Tab:
 
         The layer's dimensionality follows the selected image's spatial
         dimensionality (2 for YX/TYX, 3 for ZYX/TZYX). A rectangle drawn on
-        a timelapse carries no T coordinate, so the crop ignores the
+        a timeseries carries no T coordinate, so the crop ignores the
         rectangle's position along the time axis.
         """
         layer = self.widget_layer_select.layer.value

@@ -45,7 +45,16 @@ _TIME_UNITS_TO_SECONDS = {
     "min": 60.0,
     "minute": 60.0,
     "minutes": 60.0,
+    "h": 3600.0,
+    "hr": 3600.0,
+    "hour": 3600.0,
+    "hours": 3600.0,
 }
+
+# Canonical time units offered in the UIs, ordered from the shortest to the
+# longest duration. A curated subset of the keys of _TIME_UNITS_TO_SECONDS:
+# the aliases stay for parsing, the UIs only offer one spelling per unit.
+TIME_UNIT_CHOICES = ("µs", "ms", "s", "min", "h")
 
 
 class SemanticType(Enum):
@@ -194,7 +203,8 @@ class ImageProperties(BaseModel):
         t_spacing (float | None): Time spacing between timepoints in seconds.
             None means the source carried no timing metadata.
         t_unit (str): Unit of the time spacing. Normalized to "s" at
-            construction; other units (ms, µs, min) are converted to seconds.
+            construction; other units (ms, µs, min, h) are converted to
+            seconds.
     """
 
     name: str
@@ -212,7 +222,7 @@ class ImageProperties(BaseModel):
         if factor is None:
             raise ValueError(
                 f"Time unit {self.t_unit!r} not recognized, should be one of "
-                "s, ms, µs (us) or min"
+                "s, ms, µs (us), min or h (hour)"
             )
         if self.t_spacing is not None:
             if self.t_spacing <= 0:
@@ -220,13 +230,6 @@ class ImageProperties(BaseModel):
             self.t_spacing = self.t_spacing * factor
         self.t_unit = "s"
         return self
-
-    @property
-    def t(self) -> float:
-        """Time spacing in seconds, or the neutral 1.0 when unknown."""
-        if self.t_spacing is None:
-            return 1.0
-        return self.t_spacing
 
     @property
     def dimensionality(self) -> ImageDimensionality:
@@ -436,8 +439,7 @@ class PanSegImage:
         return images
 
     def merge_with(self, image: "PanSegImage"):
-        # VoxelSize equality is spatial only, so the time presence and the
-        # time spacing are matched explicitly here.
+        """Merge two images along the channel dimension."""
         if not all(
             (
                 self.semantic_type == image.semantic_type,
@@ -465,8 +467,6 @@ class PanSegImage:
             t_spacing=self.properties.t_spacing,
         )
 
-        # The merged channel axis sits after T in the canonical order, so
-        # timeseriess are stacked along axis 1, still images along axis 0.
         stack_axis = 1 if self.is_timeseries else 0
         data = np.stack([im.get_data() for im in images], axis=stack_axis)
         return PanSegImage(data, new_props)
@@ -605,7 +605,6 @@ class PanSegImage:
             data = np.take(data, 0, axis=i)
         properties.image_layout = ImageLayout(remaining_axes)
         if "T" in dropped_axes:
-            # The layout carries the time axis: without T the spacing is unknown.
             properties.t_spacing = None
         return data, properties
 
@@ -673,9 +672,12 @@ class PanSegImage:
     def scale(self) -> tuple[float, ...]:
         """Returns the scale of the image.
 
-        The scale is equal to the voxel size in each spatial dimension, the
-        time spacing in the time dimension (1.0 when unknown) and 1 in the
-        channel dimension.
+        The scale is equal to the voxel size in each spatial dimension, 1.0
+        in the time dimension and 1 in the channel dimension. The time axis
+        stays in timepoint indices (the napari t axis shows the existing
+        timepoints, not elapsed time): the spacing is carried in
+        properties.t_spacing and surfaced by the export metadata and the
+        input tab info panel.
         """
         if self.image_layout == ImageLayout.ZCYX:
             raise ValueError(
@@ -683,7 +685,7 @@ class PanSegImage:
             )
 
         axis_scales = {
-            "T": self.properties.t,
+            "T": 1.0,
             "C": 1.0,
             "Z": self.voxel_size.z,
             "Y": self.voxel_size.y,

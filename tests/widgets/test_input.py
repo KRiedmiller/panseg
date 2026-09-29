@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import pytest
 
+from panseg.core.image import TIME_UNIT_CHOICES
 from panseg.io.h5 import create_h5
 from panseg.io.tiff import create_tiff
 from panseg.io.voxelsize import VoxelSize
@@ -192,12 +193,57 @@ def test_set_t_spacing_schedules_task(input_tab, napari_timeseries, mocker):
         autospec=True,
     )
 
-    input_tab.widget_set_t_spacing(input_tab, "30")
+    input_tab.t_spacing.value = "30"
+    input_tab.widget_set_t_spacing()
 
     mocked_scheduler.assert_called_once()
     args, kwargs = mocked_scheduler.call_args
     assert args[0] is set_t_spacing_task
     assert kwargs["task_kwargs"]["t_spacing"] == 30.0
+    assert kwargs["task_kwargs"]["t_unit"] == "s"
+
+
+def test_set_t_spacing_unit_choices(input_tab):
+    assert list(input_tab.t_unit.choices) == list(TIME_UNIT_CHOICES)
+
+
+def test_set_t_spacing_number_and_unit_in_horizontal_row(input_tab):
+    """The number and its unit are grouped in one horizontal container."""
+    combo = input_tab.widget_set_t_spacing.t_spacing_combo
+    assert [w.name for w in combo] == ["_t_spacing", "_t_unit"]
+    assert combo.layout == "horizontal"
+
+
+@pytest.mark.parametrize(
+    "value, unit, expected",
+    [
+        ("500", "ms", 500.0),
+        ("1000", "µs", 1000.0),
+        ("2", "min", 2.0),
+        ("1.5", "h", 1.5),
+    ],
+)
+def test_set_t_spacing_passes_value_and_unit(
+    input_tab, napari_timeseries, mocker, value, unit, expected
+):
+    """The widget hands the value and the unit to the task untouched; the
+    conversion to seconds happens in the task."""
+    input_tab.widget_details_layer_select.layer.choices = [napari_timeseries]
+    input_tab.widget_details_layer_select.layer.value = napari_timeseries
+
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.input.schedule_task",
+        autospec=True,
+    )
+
+    input_tab.t_spacing.value = value
+    input_tab.t_unit.value = unit
+    input_tab.widget_set_t_spacing()
+
+    mocked_scheduler.assert_called_once()
+    task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
+    assert task_kwargs["t_spacing"] == expected
+    assert task_kwargs["t_unit"] == unit
 
 
 def test_set_t_spacing_empty_field_is_unknown(input_tab, napari_timeseries, mocker):
@@ -209,7 +255,8 @@ def test_set_t_spacing_empty_field_is_unknown(input_tab, napari_timeseries, mock
         autospec=True,
     )
 
-    input_tab.widget_set_t_spacing(input_tab, "")
+    input_tab.t_spacing.value = ""
+    input_tab.widget_set_t_spacing()
 
     mocked_scheduler.assert_called_once()
     task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
@@ -227,7 +274,8 @@ def test_set_t_spacing_invalid_field_ignored(
         autospec=True,
     )
 
-    input_tab.widget_set_t_spacing(input_tab, "abc")
+    input_tab.t_spacing.value = "abc"
+    input_tab.widget_set_t_spacing()
 
     mocked_scheduler.assert_not_called()
     assert "abc" in caplog.text
@@ -245,7 +293,8 @@ def test_set_t_spacing_nonpositive_field_ignored(
         autospec=True,
     )
 
-    input_tab.widget_set_t_spacing(input_tab, bad_value)
+    input_tab.t_spacing.value = bad_value
+    input_tab.widget_set_t_spacing()
 
     mocked_scheduler.assert_not_called()
 

@@ -23,4 +23,4 @@ carry the layout and the spacing with it.
 
 * Training is currently not supported
 * Pre- and Postprocessing steps apply to all timepoints.
-* Data must fit into memory, but can be truncated during import (see [Import](../../panseg_interactive_napari/import.md))
+* Data must fit into memory, but can be truncated during import (see [Import](../panseg_interactive_napari/import.md))

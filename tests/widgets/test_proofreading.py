@@ -1252,8 +1252,9 @@ class TestProofreadingTabTimeSeries:
 
     def test_widget_add_label_to_corrected_rasterizes_slice(self, timeseries_tab):
         tab, viewer = timeseries_tab
-        # Event position at t=0, z=1, y=1, x=1; scale (10, 1, 1, 1).
-        position = (2.0, 1.0, 1.0, 1.0)
+        # Event position at t=0, z=1, y=1, x=1; scale (1, 1, 1, 1): the t
+        # axis is in timepoint indices, so the world position is the index.
+        position = (0.0, 1.0, 1.0, 1.0)
 
         tab._widget_add_label_to_corrected(viewer, position)
 

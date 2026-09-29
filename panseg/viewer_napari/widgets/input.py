@@ -5,12 +5,12 @@ from typing import Optional, Sequence
 
 from magicgui import magic_factory
 from magicgui.widgets import Container, Label, PushButton, create_widget
-from magicgui.widgets.bases import ButtonWidget, CategoricalWidget
+from magicgui.widgets.bases import ButtonWidget, CategoricalWidget, ValueWidget
 from napari.layers import Image, Labels, Layer
 from qtpy import QtGui
 
 from panseg import logger
-from panseg.core.image import PanSegImage, SemanticType
+from panseg.core.image import TIME_UNIT_CHOICES, PanSegImage, SemanticType
 from panseg.io import H5_EXTENSIONS, ZARR_EXTENSIONS
 from panseg.io.h5 import list_h5_keys
 from panseg.io.io import guess_stack_layout
@@ -75,6 +75,7 @@ class Input_Tab:
 
         # @@@@@ Set time spacing @@@@@
         self.widget_set_t_spacing = self.factory_set_t_spacing()
+        self._wrap_t_spacing()
         self.widget_set_t_spacing.self.bind(self)
         self.widget_set_t_spacing.hide()
 
@@ -357,17 +358,8 @@ class Input_Tab:
 
     @magic_factory(
         call_button="Set Time Spacing",
-        t_spacing={
-            "label": "Time spacing [s]",
-            "tooltip": "Set the time spacing between timepoints in seconds.\n"
-            "Leave empty to mark the time spacing as unknown.",
-            "widget_type": "LineEdit",
-        },
     )
-    def factory_set_t_spacing(
-        self,
-        t_spacing: str = "",
-    ) -> None:
+    def factory_set_t_spacing(self) -> None:
         """Set the time spacing of the selected timeseries layer."""
         ps_image = self._selected_panseg_image()
         if not ps_image.is_timeseries:
@@ -375,7 +367,7 @@ class Input_Tab:
                 f"Layer {ps_image.name} is not a timeseries, no time spacing to set."
             )
 
-        value = t_spacing.strip()
+        value = self.t_spacing.value.strip()
         if value == "":
             t_spacing_value: float | None = None
         else:
@@ -396,8 +388,57 @@ class Input_Tab:
             task_kwargs={
                 "image": ps_image,
                 "t_spacing": t_spacing_value,
+                "t_unit": self.t_unit.value,
             },
         )
+
+    def _wrap_t_spacing(self):
+        """Group the time spacing value and its unit in one horizontal row.
+
+        magicgui's QuantityEdit is not a fit: its unit choices are fixed to
+        pint's defaults (which the data model would reject) and it cannot
+        represent an empty, i.e. unknown, spacing.
+        """
+        w = self.widget_set_t_spacing
+
+        t_spacing_d = {
+            "label": "Time spacing",
+            "widget_type": "LineEdit",
+            "options": {
+                "tooltip": "Set the time spacing between timepoints in the selected unit.\n"
+                "Leave empty to mark the time spacing as unknown.",
+            },
+            "annotation": str,
+            "name": "_t_spacing",
+        }
+        t_unit_d = {
+            "label": "Unit",
+            "widget_type": "ComboBox",
+            "value": "s",
+            "options": {
+                "choices": list(TIME_UNIT_CHOICES),
+                "tooltip": "Unit of the time spacing.",
+            },
+            "annotation": str,
+            "name": "_t_unit",
+        }
+
+        t_spacing: ValueWidget = create_widget(**t_spacing_d)
+        t_unit: CategoricalWidget = create_widget(**t_unit_d)
+        t_unit.max_width = 80
+
+        combo = Container(
+            widgets=[t_spacing, t_unit],
+            layout="horizontal",
+            labels=False,
+            name="t_spacing_combo",
+            label="Time spacing",
+            gui_only=True,
+        )
+
+        self.t_spacing = t_spacing
+        self.t_unit = t_unit
+        w.insert(0, combo)  # pyright: ignore
 
     def _on_details_layer_select_changed(self, layer: Optional[Layer]):
         logger.debug(f"_on_details_layer_select_changed called for layer {layer}!")

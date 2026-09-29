@@ -254,7 +254,6 @@ def test_image_properties_t_spacing_default_unknown():
     )
     assert props.t_spacing is None
     assert props.t_unit == "s"
-    assert props.t == 1.0
 
 
 def test_image_properties_t_spacing_seconds():
@@ -269,7 +268,6 @@ def test_image_properties_t_spacing_seconds():
     )
     assert props.t_spacing == 2.0
     assert props.t_unit == "s"
-    assert props.t == 2.0
 
 
 def test_image_properties_t_spacing_unit_normalization():
@@ -289,6 +287,10 @@ def test_image_properties_t_spacing_unit_normalization():
     assert min_props.t_spacing == 120.0
     assert min_props.t_unit == "s"
 
+    h_props = ImageProperties(t_spacing=1.5, t_unit="h", **kwargs)
+    assert h_props.t_spacing == 5400.0
+    assert h_props.t_unit == "s"
+
 
 def test_image_properties_t_spacing_invalid():
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
@@ -302,7 +304,7 @@ def test_image_properties_t_spacing_invalid():
     with pytest.raises(ValueError):
         ImageProperties(t_spacing=0.0, **kwargs)
     with pytest.raises(ValueError):
-        ImageProperties(t_spacing=5.0, t_unit="h", **kwargs)
+        ImageProperties(t_spacing=5.0, t_unit="lightyears", **kwargs)
 
 
 def test_image_properties_channel_axis():
@@ -591,7 +593,10 @@ def test_panseg_image_scale_property():
     assert ps_image.scale == (0.5, 1.0, 1.0)
 
 
-def test_scale_tzyx_known_t_spacing():
+@pytest.mark.parametrize("t_spacing", [0.5, None])
+def test_scale_tzyx_t_axis_is_timepoint_indices(t_spacing):
+    """The t axis shows the existing timepoints, not elapsed time: the t
+    scale stays 1.0 whether the spacing is known or not."""
     data = np.random.rand(7, 5, 16, 16)
     voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 2.0), unit="um")
     image_props = ImageProperties(
@@ -600,21 +605,7 @@ def test_scale_tzyx_known_t_spacing():
         voxel_size=voxel_size,
         image_layout=ImageLayout.TZYX,
         original_voxel_size=voxel_size,
-        t_spacing=0.5,
-    )
-    ps_image = PanSegImage(data, image_props)
-    assert ps_image.scale == (0.5, 0.5, 1.0, 2.0)
-
-
-def test_scale_tzyx_unknown_t_spacing():
-    data = np.random.rand(7, 5, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 2.0), unit="um")
-    image_props = ImageProperties(
-        name="timeseries",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
+        t_spacing=t_spacing,
     )
     ps_image = PanSegImage(data, image_props)
     assert ps_image.scale == (1.0, 0.5, 1.0, 2.0)
@@ -632,7 +623,7 @@ def test_scale_tcyx():
         t_spacing=2.0,
     )
     ps_image = PanSegImage(data, image_props)
-    assert ps_image.scale == (2.0, 1.0, 1.0, 2.0)
+    assert ps_image.scale == (1.0, 1.0, 1.0, 2.0)
 
 
 def test_requires_scaling():
@@ -803,8 +794,6 @@ def test_import_image_ZCYX_warning(mocker, test_h5_dir):
         )
 
 
-# OME-TIFF import with time (ticket 13): the committed resliced anchors carry no
-# timing metadata, so they import with t_spacing unknown.
 OME_EXAMPLES = (
     Path(__file__).resolve().parent.parent / "resources" / "ome_tiff_examples"
 )
@@ -1012,6 +1001,7 @@ def test_import_image_inline_slice_integer_drops_axis(tmp_path):
     assert image.image_layout == ImageLayout.ZYX
     assert image.shape == (5, 16, 16)
     assert image.properties.t_spacing is None
+    assert not image.is_timeseries
 
 
 def test_import_image_inline_slice_with_step(tmp_path):
@@ -1520,7 +1510,8 @@ def test_napari_layer_roundtrip_timeseries():
 
     assert loaded.image_layout == ImageLayout.TCZYX
     assert loaded.properties.t_spacing == 2.0
-    assert loaded.scale == (2.0, 1.0, 0.5, 1.0, 2.0)
+    # the t axis stays in timepoint indices: the scale is not t_spacing
+    assert loaded.scale == (1.0, 1.0, 0.5, 1.0, 2.0)
 
 
 def test_stack_sort_noop():

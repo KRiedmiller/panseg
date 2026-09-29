@@ -556,8 +556,28 @@ def test_set_t_spacing_task_sets_known_value(timeseries_tzyx):
         task for task in workflow_handler.dag.list_tasks if "set_t_spacing" in task.func
     ]
     assert len(nodes) == 1
-    assert nodes[0].parameters == {"t_spacing": 30.0}
+    assert nodes[0].parameters == {"t_spacing": 30.0, "t_unit": "s"}
     assert nodes[0].outputs == [result.unique_name]
+
+
+@pytest.mark.parametrize(
+    "t_spacing, t_unit, expected",
+    [
+        (500.0, "ms", 0.5),
+        (1000.0, "us", 0.001),
+        (2.0, "min", 120.0),
+        (1.5, "h", 5400.0),
+    ],
+)
+def test_set_t_spacing_task_converts_units(
+    timeseries_tzyx, t_spacing, t_unit, expected
+):
+    image = make_image(timeseries_tzyx, "TZYX")
+
+    result = set_t_spacing_task(image=image, t_spacing=t_spacing, t_unit=t_unit)
+
+    assert result.properties.t_spacing == expected
+    assert result.properties.t_unit == "s"
 
 
 def test_set_t_spacing_task_clears_known_value(timeseries_tzyx):

@@ -45,6 +45,7 @@ list_tasks:
       - timeseries_set_t_spacing
     parameters:
       t_spacing: 5.0
+      t_unit: s
     skip: false
   - func: gaussian_smoothing_task
     id: 00000000-0000-4000-8000-000000000003

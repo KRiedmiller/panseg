@@ -151,7 +151,9 @@ def set_voxel_size_task(
 
 @task_tracker
 @timepoint_map
-def set_t_spacing_task(image: PanSegImage, t_spacing: float | None) -> PanSegImage:
+def set_t_spacing_task(
+    image: PanSegImage, t_spacing: float | None, t_unit: str = "s"
+) -> PanSegImage:
     """Set the time spacing of a timeseries image.
 
     Property-only: the data is unchanged. Mirrors set_voxel_size_task, but
@@ -159,8 +161,10 @@ def set_t_spacing_task(image: PanSegImage, t_spacing: float | None) -> PanSegIma
 
     Args:
         image (PanSegImage): input image
-        t_spacing (float | None): new time spacing in seconds, or None to
-            mark it unknown
+        t_spacing (float | None): new time spacing in the given unit, or None
+            to mark it unknown
+        t_unit (str): unit of t_spacing (s, ms, µs/us, min or h); converted
+            to the canonical unit seconds
 
     Returns:
         PanSegImage: new image with the new time spacing
@@ -169,6 +173,7 @@ def set_t_spacing_task(image: PanSegImage, t_spacing: float | None) -> PanSegIma
         image._data,
         name=f"{image.name}_set_t_spacing",
         t_spacing=t_spacing,
+        t_unit=t_unit,
     )
     return new_image
 

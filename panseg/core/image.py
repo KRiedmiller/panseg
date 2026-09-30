@@ -200,7 +200,7 @@ class ImageProperties(BaseModel):
         image_layout (ImageLayout): Image layout of the image
         original_voxel_size (VoxelSize): Original voxel size of the image
         source_file_name (str | None): Name of the source file
-        t_spacing (float | None): Time spacing between timepoints in seconds.
+        t_spacing (float | None): Time spacing between timepoints.
             None means the source carried no timing metadata.
         t_unit (str): Unit of the time spacing. Normalized to "s" at
             construction; other units (ms, µs, min, h) are converted to
@@ -794,7 +794,7 @@ def restack_timepoints(
             voxel_size, semantic_type and t_spacing (the same checks as
             merge_with).
         t_spacing (float | None): time spacing between the restacked
-            timepoints in seconds, None if unknown.
+            timepoints, None if unknown.
         t_unit (str): unit of the time spacing, normalized to seconds.
         name (str | None): name of the restacked image; defaults to the
             first timepoint's name plus "_restacked".
@@ -892,7 +892,7 @@ def stack_sort(stack_layout: str, data, voxel_size):
     stack_layout = "".join([stack_layout[i] for i in sort_idxs])
 
     # ZCXY -> [1,0,3,2] -> [1,3,2] -> [0,2,1]
-    # layout..sort_idxs...sort_wo_ch..sorting for voxelsize
+    # layout->sort_idxs ->sort_w/o_ch->sorting for voxelsize
     sort_idxs_wo_channel = np.argsort(sort_idxs_wo_channel)
     if len(sort_idxs_wo_channel) == 2:
         sort_idxs_wo_channel = np.insert(sort_idxs_wo_channel + 1, 0, 0)
@@ -963,15 +963,6 @@ def _parse_slicing(slicing: str) -> list[slice | int]:
     return entries
 
 
-def _drop_layout_axes(stack_layout: str, drop: set[int]) -> str:
-    """Remove the axes at the given positions from a stack layout string."""
-    return "".join(
-        f"{'-' if inverted else ''}{char}"
-        for i, (char, inverted) in enumerate(_layout_tokens(stack_layout))
-        if i not in drop
-    )
-
-
 def crop_to_stack_layout(
     data: np.ndarray, stack_layout: str, slicing: str
 ) -> tuple[str, np.ndarray]:
@@ -996,7 +987,12 @@ def crop_to_stack_layout(
     dropped = {i for i, entry in enumerate(entries) if isinstance(entry, int)}
     data = data[tuple(entries)]
     if dropped:
-        stack_layout = _drop_layout_axes(stack_layout, dropped)
+        stack_layout = "".join(
+            f"{'-' if inverted else ''}{char}"
+            for i, (char, inverted) in enumerate(_layout_tokens(stack_layout))
+            if i not in dropped
+        )
+
     return stack_layout, data
 
 
@@ -1014,16 +1010,12 @@ def import_image(
         path (Path): Path to the image file
         key (Optional[str]): Key to load data from h5 or zarr files
         image_name (str): Name of the image (a unique name to identify the image)
-        semantic_type (str): Semantic type of the image, should be raw, segmentation,
-            prediction or label
-        stack_layout (str): Layout of the image, should be YX, CYX, ZYX, CZYX or ZCYX,
-            or a timeseries layout TYX, TCYX, TZYX or TCZYX
-            A slice can follow the letters, e.g.
-            "txyz[:3,:,:]", to truncate the data before the axes are
-            reordered (see crop_to_stack_layout): the entries follow the
-            layout as written, an integer entry drops its axis, and a
-            length-1 axis (other than Y and X) squeezes the result to the
-            shorter layout.
+        semantic_type (str): Semantic type of the image, should be raw,
+            segmentation, prediction or label.
+        stack_layout (str): Layout of the image, any of the letters t, c, z, y, x
+            Prepend any letter with a minus to invert it.
+            A slice can follow the letters, e.g. "txyz[:3,:,:]", to slice the
+            data before the axes are reordered.
     """
     global last_warning
     stack_layout, slicing = split_stack_layout(stack_layout.upper())

@@ -1789,7 +1789,7 @@ def test_save_image_timeseries_roundtrip(
     )
 
     if export_format == "tiff":
-        path, key = tmp_path / "seg.tiff", None
+        path, key = tmp_path / "seg.ome.tiff", None
     elif export_format == "h5":
         path, key = tmp_path / "seg.h5", "segmentation"
     else:

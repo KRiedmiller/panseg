@@ -12,7 +12,9 @@ Once you have exported an image, you can create a workflow file to repeat the pr
 
 Time series in Tiff format are exported as OME-TIFF files,
 with the `TimeIncrement` metadata written
-when the time spacing is known. H5 and zarr exports carry the layout
+when the time spacing is known. Per the OME-TIFF naming convention,
+these files carry the `.ome.tiff` extension.
+H5 and zarr exports carry the layout
 (`axis_order` attribute) and the spacing when it is known, so a re-import
 recovers the time series and its spacing.
 

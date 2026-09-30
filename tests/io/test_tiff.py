@@ -94,10 +94,22 @@ def test_tiff_roundtrip_small(tmp_path, dtype):
 
 def test_tiff_roundtrip_bigtiff(tmp_path):
     data = np.array(np.random.random((875, 100, 100)), dtype="float32")
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, VoxelSize(), force_bigtiff=True)
     assert out.exists()
     loaded = load_tiff(out)
+    assert loaded.shape == data.shape
+    assert np.array_equal(loaded, data)
+
+
+def test_tiff_roundtrip_bigtiff_renaming(tmp_path):
+    data = np.array(np.random.random((875, 100, 100)), dtype="float32")
+    out = tmp_path / "out.tiff"
+    written = tmp_path / "out.ome.tiff"
+    create_tiff(out, data, VoxelSize(), force_bigtiff=True)
+    assert not out.exists()
+    assert written.exists()
+    loaded = load_tiff(written)
     assert loaded.shape == data.shape
     assert np.array_equal(loaded, data)
 
@@ -113,7 +125,7 @@ def test_create_tiff_roundtrip_voxel_size(tmp_path):
 def test_create_tiff_bigtiff_roundtrip_voxel_size(tmp_path):
     data = np.random.random((10, 20, 30)).astype("float32")
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, voxel_size, force_bigtiff=True)
     assert _assert_no_warnings(read_tiff_voxel_size, out) == voxel_size
     assert read_tiff_shape(out) == (10, 20, 30)
@@ -127,7 +139,7 @@ def test_create_tiff_bigtiff_roundtrip_voxel_size(tmp_path):
 def test_create_tiff_bigtiff_roundtrip_voxel_size_layouts(tmp_path, layout, shape):
     data = np.random.random(shape).astype("float32")
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, voxel_size, layout=layout, force_bigtiff=True)
     assert _assert_no_warnings(read_tiff_voxel_size, out) == voxel_size
     assert read_tiff_shape(out) == shape
@@ -577,7 +589,7 @@ TIMESERIES_EXPORT_CASES = [
 @pytest.mark.parametrize("layout,shape,_sizes", TIMESERIES_EXPORT_CASES)
 def test_create_tiff_timeseries_layouts_write_ome(tmp_path, layout, shape, _sizes):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, VoxelSize(voxels_size=(1.0, 1.0, 1.0)), layout=layout)
     with tifffile.TiffFile(out) as tiff:
         assert tiff.series[0].axes == layout
@@ -590,7 +602,7 @@ def test_create_tiff_timeseries_layouts_write_ome(tmp_path, layout, shape, _size
 @pytest.mark.parametrize("layout,shape,sizes", TIMESERIES_EXPORT_CASES)
 def test_create_tiff_timeseries_ome_pixel_sizes(tmp_path, layout, shape, sizes):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
     create_tiff(out, data, voxel_size, layout=layout)
     with tifffile.TiffFile(out) as tiff:
@@ -603,7 +615,7 @@ def test_create_tiff_timeseries_ome_pixel_sizes(tmp_path, layout, shape, sizes):
 @pytest.mark.parametrize("layout,shape,_sizes", TIMESERIES_EXPORT_CASES)
 def test_create_tiff_timeseries_time_increment(tmp_path, layout, shape, _sizes):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(
         out,
         data,
@@ -624,7 +636,7 @@ def test_create_tiff_timeseries_unknown_t_spacing_no_time_metadata(
     tmp_path, layout, shape, _sizes
 ):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, VoxelSize(voxels_size=(1.0, 1.0, 1.0)), layout=layout)
     with tifffile.TiffFile(out) as tiff:
         pixels = _ome_pixels(ElementTree.fromstring(tiff.ome_metadata))
@@ -640,6 +652,7 @@ def test_create_tiff_timeseries_bigtiff_behavior_unchanged(tmp_path):
     # chosen when forced or above the 4 GiB boundary
     data = (np.random.default_rng(0).random((4, 5, 16, 16)) * 100).astype("uint16")
     out = tmp_path / "out.tiff"
+    written = tmp_path / "out.ome.tiff"
     create_tiff(
         out,
         data,
@@ -648,11 +661,11 @@ def test_create_tiff_timeseries_bigtiff_behavior_unchanged(tmp_path):
         t_spacing=2.0,
         force_bigtiff=True,
     )
-    with tifffile.TiffFile(out) as tiff:
+    with tifffile.TiffFile(written) as tiff:
         assert tiff.is_bigtiff
         assert tiff.series[0].axes == "TZYX"
         assert np.array_equal(tiff.asarray(), data)
-    assert read_ome_time_spacing(out) == (2.0, "s")
+    assert read_ome_time_spacing(written) == (2.0, "s")
 
 
 def test_create_tiff_imagej_branch_stays_timeless(tmp_path):

@@ -16,7 +16,8 @@ the file's OME-XML, and it reads the time spacing from the timing metadata
 (`TimeIncrement` or `Plane.DeltaT`) if the file carries it.
 
 Export writes the time axis back out. Tiff export of a time series is always
-OME-TIFF, with `TimeIncrement` when the spacing is known. H5 and zarr export
+OME-TIFF, named with the `.ome.tiff` extension per the OME-TIFF naming
+convention, with `TimeIncrement` when the spacing is known. H5 and zarr export
 carry the layout and the spacing with it.
 
 ## Limitations

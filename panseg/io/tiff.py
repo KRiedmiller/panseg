@@ -409,6 +409,8 @@ def create_tiff(
             # the time spacing is canonical seconds
             ome_metadata["TimeIncrement"] = t_spacing
             ome_metadata["TimeIncrementUnit"] = "s"
+        if len(suffs := path.suffixes[-2:]) in [1, 2] and suffs[0] != ".ome":
+            path = path.with_name(path.stem + ".ome" + path.suffix)
         tifffile.imwrite(
             path,
             data=logical_stack,

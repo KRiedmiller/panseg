@@ -1,3 +1,5 @@
+import contextlib
+import threading
 from collections import deque
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from magicgui.widgets import Container
 from napari.qt import get_qapp
 
 from panseg.core.image import PanSegImage
+from panseg.functionals.proofreading.split_merge_tools import split_merge_from_seeds
 from panseg.viewer_napari.widgets.proofreading import (
     CORRECTED_CELLS_LAYER_NAME,
     SCRIBBLES_LAYER_NAME,
@@ -1185,6 +1188,102 @@ class TestProofreadingTabTimeSeries:
         )
         assert not tab.busy
 
+    def test_set_busy_locks_timepoint_field(self, timeseries_tab):
+        tab, _viewer = timeseries_tab
+        assert tab.widget_timepoint_select.enabled
+
+        tab._set_busy(True)
+
+        assert tab.busy
+        assert not tab.widget_timepoint_select.enabled
+
+        tab._set_busy(False)
+
+        assert not tab.busy
+        assert tab.widget_timepoint_select.enabled
+
+    def test_split_merge_writeback_isolated_from_midflight_timepoint_change(
+        self, timeseries_tab, napari_timeseries_prediction, mocker, qtbot
+    ):
+        """A Timepoint change while a split/merge worker runs is refused.
+
+        The in-flight write-back must land in the session timepoint's slice
+        only, and the undo snapshot the worker pushed must survive.
+        """
+        tab, viewer = timeseries_tab
+        layer = viewer.layers["test_segmentation_timeseries"]
+        before = layer.data.copy()
+        scribbles = viewer.layers["Scribbles (t=0)"]
+        # One scribble color over the two t=0 cells: they merge.
+        scribbles.data[0:2, 0:2, 0:2] = 1
+        scribbles.data[0:2, 5:7, 5:7] = 1
+
+        # Hold the worker inside split_merge_from_seeds — after it pushed the
+        # undo snapshot, before it writes back — to make the race window
+        # deterministic.
+        reached, release = threading.Event(), threading.Event()
+        real_split_merge = split_merge_from_seeds
+
+        def blocked_split_merge(*args, **kwargs):
+            reached.set()
+            assert release.wait(timeout=30)
+            return real_split_merge(*args, **kwargs)
+
+        mocker.patch(
+            "panseg.viewer_napari.widgets.proofreading.split_merge_from_seeds",
+            side_effect=blocked_split_merge,
+        )
+        mock_log = mocker.patch("panseg.viewer_napari.widgets.proofreading.log")
+
+        worker = tab.widget_split_and_merge_from_scribbles(
+            viewer=viewer, image=napari_timeseries_prediction
+        )
+        assert worker is not None
+        assert tab.busy
+        try:
+            # The Timepoint field is locked while the worker runs.
+            assert not tab.widget_timepoint_select.enabled
+            qtbot.waitUntil(lambda: reached.is_set(), timeout=10000)
+            assert len(tab.handler._state.history_undo) == 1
+
+            tab.widget_timepoint_select.value = 2
+
+            # The rebind is refused: session, slider and field all stay on t=0.
+            assert mock_log.call_args_list[-1].args[0] == (
+                "The proofreading tool is busy. The timepoint change to 2 was not "
+                "applied: wait for the running worker to finish before switching "
+                "timepoints."
+            )
+            assert tab.handler.timepoint == 0
+            assert tab.widget_timepoint_select.value == 0
+            assert viewer.dims.current_step[0] == 0
+            assert "Scribbles (t=0)" in viewer.layers
+
+            release.set()
+            qtbot.waitUntil(lambda: not tab.busy, timeout=10000)
+            assert tab.widget_timepoint_select.enabled
+
+            # The merged result landed in t=0 only.
+            after = layer.data
+            np.testing.assert_array_equal(after[1], before[1])
+            np.testing.assert_array_equal(after[2], before[2])
+            merged = after[0]
+            assert (merged[0:2, 0:2, 0:2] == 1).all()
+            assert (merged[0:2, 5:7, 5:7] == 1).all()
+            assert (merged[4:, 8:, 8:] == 0).all()
+
+            # The worker's undo snapshot survived the attempted rebind.
+            assert len(tab.handler._state.history_undo) == 1
+            assert not tab.handler._state.history_redo
+            np.testing.assert_array_equal(
+                tab.handler._state.history_undo[0].segmentation, before[0]
+            )
+        finally:
+            # Never leave the worker blocked in a failed test run.
+            release.set()
+            with contextlib.suppress(Exception):
+                qtbot.waitUntil(lambda: not worker.is_running, timeout=10000)
+
     def test_split_merge_applies_to_session_timepoint_only(
         self, timeseries_tab, napari_timeseries_prediction, qtbot
     ):
@@ -1270,7 +1369,10 @@ class TestProofreadingTabTimeSeries:
 
         worker = tab.widget_filter_segmentation()
         assert worker is not None
+        # The Timepoint field is locked while the extraction runs.
+        assert not tab.widget_timepoint_select.enabled
         qtbot.waitUntil(lambda: not tab.busy)
+        assert tab.widget_timepoint_select.enabled
 
         extracted = viewer.layers["test_segmentation_timeseries_corrected_t001"]
         assert extracted.data.shape == (4, 10, 10)

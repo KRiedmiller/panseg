@@ -606,7 +606,9 @@ class ProofreadingHandler:
         """Updates the viewer after proofreading is completed.
 
         For timeseries sessions only the session timepoint is written: every
-        other timepoint of the layer is left byte-identical.
+        other timepoint of the layer is left byte-identical. The session
+        timepoint is read at write-back time, which is safe because the
+        widget refuses Timepoint changes while a worker is running.
 
         Args:
             seg_slice (np.ndarray): The segmentation slice to update.
@@ -630,6 +632,8 @@ class ProofreadingHandler:
 
 class Proofreading_Tab:
     def __init__(self):
+        # Never assign this directly outside _set_busy: the flag doubles as
+        # the Timepoint field's enabled state (see _set_busy).
         self.busy = False
 
         # Initialize the handler
@@ -954,11 +958,30 @@ class Proofreading_Tab:
         else:
             self.widget_timepoint_container.hide()
 
+    def _set_busy(self, busy: bool) -> None:
+        """Sets the busy flag and with it the availability of the Timepoint field.
+
+        While a proofreading worker runs, the Timepoint field is disabled: a
+        mid-flight re-bind would re-target the worker's write-back to another
+        timepoint's slice.
+
+        Args:
+            busy (bool): True while a worker is running, False otherwise.
+        """
+        self.busy = busy
+        self.widget_timepoint_select.enabled = not busy
+
     def _on_timepoint_changed(self, timepoint: int) -> None:
         """Re-binds the session to the selected timepoint and moves the T slider.
 
         The int input — not the T slider — is the timepoint selector: the
         slider follows the input (one-way).
+
+        While a split/merge or label-extraction worker runs, the change is
+        refused: the in-flight worker computes its result from the session's
+        current timepoint and writes it back there when it completes, so
+        re-binding now would land the result in the wrong timepoint's slice
+        and discard the undo snapshot the worker pushed.
 
         Args:
             timepoint (int): The selected timepoint.
@@ -966,6 +989,17 @@ class Proofreading_Tab:
         if not self.handler.active or not self.handler.is_timeseries:
             return
         if timepoint == self.handler.timepoint:
+            return
+        if self.busy:
+            log(
+                f"The proofreading tool is busy. The timepoint change to "
+                f"{timepoint} was not applied: wait for the running worker to "
+                f"finish before switching timepoints.",
+                thread="Proofreading tool",
+                level="error",
+            )
+            # Snap the field back so it keeps showing the session timepoint.
+            self.widget_timepoint_select.value = self.handler.timepoint
             return
         self.handler.rebind(timepoint)
         viewer = napari.current_viewer()
@@ -1066,7 +1100,7 @@ class Proofreading_Tab:
                     thread="filter_segmentation",
                     level="INFO",
                 )
-            self.busy = False
+            self._set_busy(False)
 
         def on_error(err):
             log(
@@ -1074,13 +1108,13 @@ class Proofreading_Tab:
                 thread="filter_segmentation",
                 level="Warning",
             )
-            self.busy = False
+            self._set_busy(False)
 
         if self.busy:
             log("Busy! Try again later!", thread="filter_segmentation", level="Warning")
             return
 
-        self.busy = True
+        self._set_busy(True)
         worker = func()  # type: ignore
         worker.returned.connect(on_done)
         worker.errored.connect(on_error)
@@ -1151,7 +1185,7 @@ class Proofreading_Tab:
             viewer = napari.current_viewer()
             if result is not None and viewer is not None:
                 viewer._add_layer_from_data(*result)
-            self.busy = False
+            self._set_busy(False)
             log(
                 "Done extracting corrected labels",
                 thread="filter_segmentation",
@@ -1164,13 +1198,13 @@ class Proofreading_Tab:
                 thread="filter_segmentation",
                 level="WARNING",
             )
-            self.busy = False
+            self._set_busy(False)
 
         if self.busy:
             log("Busy! Try again later!", thread="filter_segmentation", level="Warning")
             return
 
-        self.busy = True
+        self._set_busy(True)
         worker = func()  # type: ignore
         worker.returned.connect(on_done)
         worker.errored.connect(on_error)

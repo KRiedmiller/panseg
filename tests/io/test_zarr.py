@@ -137,7 +137,7 @@ def test_read_zarr_axis_order_present(tmp_path):
     assert read_zarr_axis_order(tmp_path / "out.zarr") == "TZYX"
 
 
-# --- Time-aware export (ticket 14): PanSeg zarr exports carry the axis order
+# --- Time-aware export: PanSeg zarr exports carry the axis order
 # on every export and the time spacing attrs when known. ---
 
 

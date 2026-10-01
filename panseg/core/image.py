@@ -318,6 +318,28 @@ class PanSegImage:
         new_properties = ImageProperties(**property_dict)
         return PanSegImage(data, new_properties)
 
+    def set_t_spacing(self, t_spacing: float | None, t_unit: str = "s") -> None:
+        """Replace the time spacing of this image, in place.
+
+        Rebuilds the properties through the validated ImageProperties
+        constructor, so the unit is normalized to seconds and the
+        spacing checked for positivity - unlike a raw attribute
+        assignment on the properties. The frame-by-frame loop uses it
+        to stamp the inputs' shared spacing onto the split timepoints
+        (a timepoint is not a timeseries and carries no spacing of its
+        own; see split_timepoints), so task bodies preserve it through
+        derive_new and property tasks can override it.
+
+        Args:
+            t_spacing (float | None): new time spacing in the given
+                unit, or None to mark it unknown.
+            t_unit (str): unit of t_spacing (s, ms, µs/us, min or h).
+        """
+        properties = self._properties.model_dump()
+        properties["t_spacing"] = t_spacing
+        properties["t_unit"] = t_unit
+        self._properties = ImageProperties(**properties)
+
     @classmethod
     def from_napari_layer(cls, layer: Image | Labels) -> "PanSegImage":
         """

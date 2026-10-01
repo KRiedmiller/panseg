@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +16,8 @@ from rich.traceback import Traceback
 
 from panseg.__version__ import __version__
 from panseg.core.image import PanSegImage, restack_timepoints
+
+logger = logging.getLogger(__name__)
 
 
 class NodeType(str, Enum):
@@ -527,12 +530,23 @@ def _restacked_name(output_name: str, timeseries_inputs: dict) -> str:
     return name
 
 
-def _restack_timepoint_outputs(results: list, timeseries_inputs: dict):
+def _restack_timepoint_outputs(
+    results: list,
+    timeseries_inputs: dict,
+    task_name: str,
+    shared_t_spacing: float | None,
+):
     """Restack the per-timepoint outputs of a frame-mapped task.
 
     Every timepoint must return the same structure: one PanSegImage, a
     list/tuple of PanSegImages (restacked element-wise, e.g. both outputs
     of remove_false_positives_by_foreground_probability_task), or None.
+
+    The restacked output takes the shared spacing of the timeseries
+    inputs (the full rule is in the timepoint_map docstring): an output
+    that carries no t_spacing - e.g. a body that rebuilt its image from
+    scratch - falls back to the shared spacing with a warning, so a
+    frame-mapped run never silently loses the input timing.
     """
     outputs_per_timepoint = []
     for result in results:
@@ -568,13 +582,24 @@ def _restack_timepoint_outputs(results: list, timeseries_inputs: dict):
     restacked = []
     for j in range(n_outputs):
         outputs = [result[j] for result in outputs_per_timepoint]
+        t_spacing = outputs[0].properties.t_spacing
+        if t_spacing is None and shared_t_spacing is not None:
+            logger.warning(
+                "Task %s: per-timepoint outputs carry no t_spacing, "
+                "falling back to the inputs' shared t_spacing (%g s). "
+                "Derive task outputs from their input (derive_new) or "
+                "set t_spacing explicitly to avoid this.",
+                task_name,
+                shared_t_spacing,
+            )
+            t_spacing = shared_t_spacing
         restacked.append(
             restack_timepoints(
                 outputs,
                 # the task bodies left the effective spacing on their
                 # outputs: preserved from the input, or overridden by a
                 # property task like set_t_spacing_task
-                t_spacing=outputs[0].properties.t_spacing,
+                t_spacing=t_spacing,
                 t_unit=outputs[0].properties.t_unit,
                 name=_restacked_name(outputs[0].name, timeseries_inputs),
             )
@@ -607,6 +632,13 @@ def timepoint_map(
 
     - All timeseries inputs must have the same number of timepoints and the
       same t_spacing (both unknown is fine); a mismatch raises ValueError.
+    - The restacked output takes the inputs' shared t_spacing: a task body
+      preserves it by deriving its outputs from the input (derive_new) or
+      overrides it with a non-None t_spacing (e.g. set_t_spacing_task). A
+      per-timepoint output that carries no t_spacing - e.g. a body that
+      rebuilt its image from scratch instead of deriving it from the input
+      - falls back to the shared spacing with a warning, so a frame-mapped
+      run never silently loses the input timing.
     - A still image next to timeseries inputs raises ValueError unless the
       task opts in with broadcast=True: the still image is then applied to
       every timepoint (e.g. a static background).
@@ -680,16 +712,16 @@ def timepoint_map(
                 )
 
             # A timepoint loses t_spacing in the split; stamp the shared
-            # spacing back on so task bodies preserve it through derive_new
-            # and property tasks can override it. The restack reads the
-            # spacing back from the per-timepoint outputs.
+            # spacing back on through the validated core API so task
+            # bodies preserve it through derive_new and property tasks
+            # can override it (fallback rule: timepoint_map docstring).
             timepoints_per_input = {
                 name: image.split_timepoints()
                 for name, image in timeseries_inputs.items()
             }
             for timepoints in timepoints_per_input.values():
                 for timepoint in timepoints:
-                    timepoint._properties.t_spacing = shared_t_spacing
+                    timepoint.set_t_spacing(shared_t_spacing)
 
             tracker = kwargs.get("_tracker")
             if tracker is not None:
@@ -709,7 +741,9 @@ def timepoint_map(
                 if tracker is not None:
                     tracker.progress += 1
 
-            return _restack_timepoint_outputs(results, timeseries_inputs)
+            return _restack_timepoint_outputs(
+                results, timeseries_inputs, func.__name__, shared_t_spacing
+            )
 
         setattr(wrapper, "__timepoint_mapped__", True)
         return wrapper

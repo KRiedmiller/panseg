@@ -67,7 +67,7 @@ def test_read_h5_axis_order_present(tmp_path):
     assert read_h5_axis_order(out) == "TZYX"
 
 
-# --- Time-aware export (ticket 14): PanSeg h5 exports carry the axis order
+# --- Time-aware export: PanSeg h5 exports carry the axis order
 # on every export and the time spacing attrs when known. ---
 
 

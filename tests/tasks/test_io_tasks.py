@@ -387,7 +387,7 @@ def test_label_io_mesh_error(tmp_path):
     assert "Mesh export only supported for 3D" in out.message
 
 
-# --- Time-aware mesh export (ticket 14): a 3D timeseries segmentation writes
+# --- Time-aware mesh export: a 3D timeseries segmentation writes
 # one mesh file per timepoint, empty timepoints included. ---
 
 

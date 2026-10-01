@@ -159,6 +159,12 @@ def set_t_spacing_task(
     Property-only: the data is unchanged. Mirrors set_voxel_size_task, but
     for the time axis.
 
+    Note: on a timeseries input with a known spacing, t_spacing=None does
+    not clear the restacked output's spacing - the restacked output takes
+    the shared input spacing and the frame-by-frame loop warns about the
+    fallback. It clears only when the input spacing is unknown or the
+    input is a still image (which passes the loop through untouched).
+
     Args:
         image (PanSegImage): input image
         t_spacing (float | None): new time spacing in the given unit, or None

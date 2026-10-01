@@ -493,6 +493,62 @@ def test_panseg_image_derive_new():
     assert new_image.original_voxel_size == voxel_size
 
 
+def _make_timeseries_image(t_spacing: float | None = None) -> PanSegImage:
+    data = np.random.rand(2, 10, 10)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="test_image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.TYX,
+        original_voxel_size=voxel_size,
+        t_spacing=t_spacing,
+    )
+    return PanSegImage(data, image_props)
+
+
+def test_panseg_image_set_t_spacing_normalizes_unit():
+    ps_image = _make_timeseries_image()
+
+    ps_image.set_t_spacing(500.0, t_unit="ms")
+
+    assert ps_image.properties.t_spacing == 0.5
+    assert ps_image.properties.t_unit == "s"
+
+
+def test_panseg_image_set_t_spacing_preserves_other_properties():
+    ps_image = _make_timeseries_image()
+    voxel_size = ps_image.voxel_size
+
+    ps_image.set_t_spacing(10.0)
+
+    assert ps_image.name == "test_image"
+    assert ps_image.image_layout == ImageLayout.TYX
+    assert ps_image.voxel_size == voxel_size
+    assert ps_image.semantic_type == SemanticType.RAW
+    assert ps_image.shape == (2, 10, 10)
+
+
+def test_panseg_image_set_t_spacing_clears_known_value():
+    ps_image = _make_timeseries_image(t_spacing=10.0)
+
+    ps_image.set_t_spacing(None)
+
+    assert ps_image.properties.t_spacing is None
+    assert ps_image.properties.t_unit == "s"
+
+
+def test_panseg_image_set_t_spacing_rejects_invalid_values():
+    ps_image = _make_timeseries_image()
+
+    with pytest.raises(ValueError, match="Time spacing must be positive"):
+        ps_image.set_t_spacing(0.0)
+    with pytest.raises(ValueError, match="not recognized"):
+        ps_image.set_t_spacing(5.0, t_unit="lightyears")
+    # a rejected value leaves the previous spacing untouched
+    assert ps_image.properties.t_spacing is None
+
+
 def test_panseg_image_get_data():
     data = np.random.rand(10, 10, 10)
     voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
@@ -1734,9 +1790,24 @@ def test_timeseries_segmentation_fixture(timeseries_segmentation):
         assert image.properties.t_spacing == expected_t_spacing
 
 
-# --- Time-aware export (ticket 14): a time-bearing image roundtrips through
+# --- Time-aware export: a time-bearing image roundtrips through
 # save_image/import_image with layout and t_spacing preserved; _timeseries_ps_image
 # (defined with the split tests above) supplies the images. ---
+
+
+def _timeseries_ps_image(data, layout, t_spacing=None):
+    voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.15), unit="um")
+    return PanSegImage(
+        data=data,
+        properties=ImageProperties(
+            name="timeseries",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=voxel_size,
+            image_layout=ImageLayout(layout),
+            original_voxel_size=voxel_size,
+            t_spacing=t_spacing,
+        ),
+    )
 
 
 @pytest.mark.parametrize(

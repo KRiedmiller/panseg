@@ -224,6 +224,23 @@ def tracker_task(image: PanSegImage, _tracker=None) -> PanSegImage:
     return image.derive_new(image.get_data(), name=f"{image.name}_ok")
 
 
+@task_tracker
+@timepoint_map
+def rebuild_from_scratch_task(image: PanSegImage) -> PanSegImage:
+    """A task body that builds a fresh PanSegImage instead of deriving
+    from its input: it copies the properties it knows about, and a
+    timepoint is not a timeseries, so it has no way to know about
+    t_spacing."""
+    properties = ImageProperties(
+        name=f"{image.name}_rebuilt",
+        semantic_type=image.semantic_type,
+        voxel_size=image.voxel_size,
+        image_layout=image.image_layout,
+        original_voxel_size=image.original_voxel_size,
+    )
+    return PanSegImage(image.get_data(), properties)
+
+
 @pytest.fixture(autouse=True)
 def _clean_dag_log_and_registry():
     """Reset the DAG and the global func registry around every test.
@@ -605,6 +622,35 @@ def test_equal_t_spacing_becomes_the_shared_spacing(t_spacing, expected):
     assert result.properties.t_spacing == expected
 
 
+def test_rebuilt_image_outputs_keep_the_shared_t_spacing(timeseries_tzyx, caplog):
+    """A task body that rebuilds its image from
+    scratch must not silently lose the inputs' t_spacing - the
+    restacked output takes the shared spacing, and the fallback
+    warns instead of being silent."""
+    image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
+
+    result = rebuild_from_scratch_task(image=image)
+
+    assert result.is_timeseries
+    assert result.name == "image_rebuilt"
+    assert result.properties.t_spacing == TIMESERIES_T_SPACING
+    assert "shared t_spacing" in caplog.text
+
+
+def test_rebuilt_image_outputs_with_unknown_input_spacing_stay_unknown(
+    timeseries_tzyx, caplog
+):
+    """Nothing to fall back to: unknown input spacing stays unknown, no
+    warning."""
+    image = make_image(timeseries_tzyx, "TZYX")  # no t_spacing
+
+    result = rebuild_from_scratch_task(image=image)
+
+    assert result.is_timeseries
+    assert result.properties.t_spacing is None
+    assert "shared t_spacing" not in caplog.text
+
+
 def test_set_t_spacing_task_sets_known_value(timeseries_tzyx):
     image = make_image(timeseries_tzyx, "TZYX")
 
@@ -635,12 +681,20 @@ def test_set_t_spacing_task_converts_units(timeseries_tzyx):
     assert result.properties.t_unit == "s"
 
 
-def test_set_t_spacing_task_clears_known_value(timeseries_tzyx):
+def test_set_t_spacing_task_clear_on_known_input_falls_back_to_shared(
+    timeseries_tzyx, caplog
+):
+    """The restacked output takes the shared spacing (spec): clearing to
+    None on a timeseries with a known spacing therefore restores the
+    inputs' spacing, and the fallback warns. Clearing sticks only when
+    the input spacing is unknown (or the input is a still image, which
+    passes the loop through untouched)."""
     image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
 
     result = set_t_spacing_task(image=image, t_spacing=None)
 
-    assert result.properties.t_spacing is None
+    assert result.properties.t_spacing == TIMESERIES_T_SPACING
+    assert "shared t_spacing" in caplog.text
 
 
 def test_relabel_segmentation_is_per_timepoint(timeseries_segmentation):

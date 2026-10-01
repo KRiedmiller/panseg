@@ -616,7 +616,7 @@ def test_check_ome_single_file_ignores_non_ome(tmp_path):
     check_ome_single_file(out)
 
 
-# --- Time-aware export (ticket 14): a time-bearing image is always written
+# --- Time-aware export: a time-bearing image is always written
 # as OME-TIFF (the ImageJ branch stays time-less), T fills the T slot of the
 # TZCYXS order, TimeIncrement is written only when the spacing is known. ---
 

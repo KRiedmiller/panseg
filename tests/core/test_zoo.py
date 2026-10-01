@@ -125,11 +125,8 @@ def test_halo_computation_local_models(model):
 
 
 def test_dimensionality_filter_is_spatial_only():
-    """The zoo's dimensionality records are spatial only ("2D"/"3D") and the
-    filter partitions them; no record carries a T-dependent value.
-    How a T-bearing image routes to 2D/3D models is covered
-    compositionally: the derived-props table in test_image.py plus the
-    existing 2D/3D tests on standalone images."""
+    """The zoo's dimensionality is a spatial property, with no T-dependent
+    values: a TZYX image picks 3D models, a TYX image 2D models."""
     dimensionalities = {
         record["dimensionality"]
         for record in model_zoo.get_model_zoo_dict().values()

@@ -67,8 +67,9 @@ def napari_raw_4d():
     return Image(data, metadata=metadata, name="test_image_2D")
 
 
-@pytest.fixture
-def napari_timeseries():
+def _napari_timeseries_layer(t_props: dict) -> Image:
+    """RAW TZYX napari layer; the time metadata comes from one of the
+    TIMESERIES_PROPS_* dicts below (known vs unknown t_spacing)."""
     data = np.random.rand(4, 5, 16, 16).astype("float32")
     voxel_size = (1.0, 1.0, 1.0)
     metadata = {
@@ -76,27 +77,23 @@ def napari_timeseries():
         "voxel_size": {"voxels_size": voxel_size, "unit": "um"},
         "original_voxel_size": {"voxels_size": voxel_size, "unit": "um"},
         "image_layout": "TZYX",
-        "t_spacing": 10.0,
         "t_unit": "s",
+        **t_props,
         "id": uuid4(),
     }
     return Image(data, metadata=metadata, name="test_timeseries")
 
 
 @pytest.fixture
+def napari_timeseries():
+    """Timeseries napari layer with a known t_spacing (10 s)."""
+    return _napari_timeseries_layer(TIMESERIES_PROPS_KNOWN_T_SPACING)
+
+
+@pytest.fixture
 def napari_timeseries_unknown_t_spacing():
-    data = np.random.rand(4, 5, 16, 16).astype("float32")
-    voxel_size = (1.0, 1.0, 1.0)
-    metadata = {
-        "semantic_type": SemanticType.RAW,
-        "voxel_size": {"voxels_size": voxel_size, "unit": "um"},
-        "original_voxel_size": {"voxels_size": voxel_size, "unit": "um"},
-        "image_layout": "TZYX",
-        "t_spacing": None,
-        "t_unit": "s",
-        "id": uuid4(),
-    }
-    return Image(data, metadata=metadata, name="test_timeseries_unknown")
+    """Timeseries napari layer with unknown t_spacing."""
+    return _napari_timeseries_layer(TIMESERIES_PROPS_UNKNOWN_T_SPACING)
 
 
 @pytest.fixture
@@ -533,6 +530,10 @@ _TIMESERIES_OME_SHAPES: dict[str, tuple[int, ...]] = {
     for axes in ("TYX", "TCYX", "TZYX", "TCZYX")
 }
 
+# First-plane DeltaT differences of the nonuniform_plane_delta_t variant;
+# deliberately non-uniform so differencing cannot yield a spacing.
+_NONUNIFORM_DELTA_T_DIFFS = (1000, 2000, 4000)
+
 
 def _write_ome_timeseries(
     path: Path,
@@ -541,7 +542,7 @@ def _write_ome_timeseries(
     seed: int,
     t_increment: float | None = None,
     t_increment_unit: str = "s",
-    plane_delta_t: Sequence[int | float] | None = None,
+    plane_delta_t: Sequence[int | float | None] | None = None,
     plane_delta_t_unit: str = "ms",
 ) -> Path:
     rng = np.random.default_rng(seed)
@@ -551,18 +552,28 @@ def _write_ome_timeseries(
         metadata["TimeIncrement"] = t_increment
         metadata["TimeIncrementUnit"] = t_increment_unit
     if plane_delta_t is not None:
-        metadata["Plane"] = {
-            "DeltaT": plane_delta_t,
-            "DeltaTUnit": [plane_delta_t_unit] * len(plane_delta_t),
-        }
+        # one attribute dict per plane in raster order; an empty dict
+        # omits DeltaT/DeltaTUnit for that plane (tifffile skips absent
+        # per-plane attributes but serializes None values as the string
+        # "None", so None must be dropped here)
+        metadata["Plane"] = [
+            {} if value is None else {"DeltaT": value, "DeltaTUnit": plane_delta_t_unit}
+            for value in plane_delta_t
+        ]
     tifffile.imwrite(path, data, ome=True, photometric="minisblack", metadata=metadata)
     return path
 
 
 def _plane_delta_t_sequence(
-    axes: str, shape: tuple[int, ...], per_timepoint: Sequence[int | float]
-) -> list[int | float]:
-    """Per-plane DeltaT values in plane raster order (last page axis fastest)."""
+    axes: str, shape: tuple[int, ...], per_timepoint: Sequence[int | float | None]
+) -> list[int | float | None]:
+    """Per-plane DeltaT values in plane raster order (last page axis fastest).
+
+    Each plane carries the absolute DeltaT given for its timepoint; a None
+    entry yields no DeltaT attribute for that timepoint's planes (the
+    caller turns None entries into empty per-plane attribute dicts, which
+    tifffile writes as attribute-less Plane elements).
+    """
     page_shape = shape[:-2]
     t_axis = axes.index("T")
     return [
@@ -573,14 +584,20 @@ def _plane_delta_t_sequence(
 
 @pytest.fixture
 def make_ome_timeseries(tmp_path):
-    """Factory for synthetic OME-TIFF timeseriess written into tmp_path.
+    """Factory for synthetic OME-TIFF timeseries written into tmp_path.
 
     Defaults to the TZYX slice of the shared shape skeleton. ``t_increment``
-    writes the Pixels TimeIncrement/TimeIncrementUnit attributes;
-    ``plane_delta_t`` writes a uniform per-plane DeltaT and
-    ``nonuniform_plane_delta_t`` a per-timepoint varying DeltaT (1000 ms,
-    2000 ms, ...). With none of them the file carries no timing metadata.
-    Returns the written file path.
+    writes the Pixels TimeIncrement/TimeIncrementUnit attributes.
+    ``plane_delta_t`` writes realistic ABSOLUTE Plane.DeltaT times (OME's
+    DeltaT is the time of a plane since acquisition start, not an
+    increment): a scalar is the uniform time step, so every plane of
+    timepoint i carries DeltaT = i * plane_delta_t, while a sequence gives
+    the per-timepoint DeltaT directly (a None entry omits the attribute
+    for that timepoint's planes, i.e. partially documented timing).
+    ``nonuniform_plane_delta_t`` writes per-timepoint absolute DeltaT
+    whose first-plane differences are non-uniform (0, 1000, 3000, 7000,
+    ... in the given unit). With none of them the file carries no timing
+    metadata. Returns the written file path.
     """
     counter = 0
 
@@ -589,7 +606,7 @@ def make_ome_timeseries(tmp_path):
         shape: tuple[int, ...] | None = None,
         t_increment: float | None = None,
         t_increment_unit: str = "s",
-        plane_delta_t: float | None = None,
+        plane_delta_t: float | Sequence[float | None] | None = None,
         nonuniform_plane_delta_t: bool = False,
         plane_delta_t_unit: str = "ms",
     ) -> Path:
@@ -598,13 +615,33 @@ def make_ome_timeseries(tmp_path):
         if shape is None:
             shape = _TIMESERIES_OME_SHAPES[axes]
         assert len(shape) == len(axes)
+        n_t = shape[axes.index("T")]
         if nonuniform_plane_delta_t:
-            per_timepoint = [1000 * (i + 1) for i in range(shape[axes.index("T")])]
-            sequence = _plane_delta_t_sequence(axes, shape, per_timepoint)
+            # non-uniform absolute acquisition times: 0, 1000, 3000, 7000,
+            # 8000, ... (first-plane differences 1000, 2000, 4000, ...)
+            per_timepoint = [0]
+            for diff in itertools.islice(
+                itertools.cycle(_NONUNIFORM_DELTA_T_DIFFS), n_t - 1
+            ):
+                per_timepoint.append(per_timepoint[-1] + diff)
+        elif isinstance(plane_delta_t, Sequence):
+            # explicit per-timepoint absolute DeltaT; None omits the
+            # attribute for that timepoint's planes
+            per_timepoint = list(plane_delta_t)
+            assert len(per_timepoint) == n_t
         elif plane_delta_t is not None:
-            sequence = [plane_delta_t] * int(np.prod(shape[:-2]))
+            # realistic absolute times for a uniform timelapse: the first
+            # plane of timepoint i sits at i * plane_delta_t (constant per
+            # timepoint, which is realistic enough; the reader reads only
+            # first planes)
+            per_timepoint = [i * plane_delta_t for i in range(n_t)]
         else:
-            sequence = None
+            per_timepoint = None
+        sequence = (
+            None
+            if per_timepoint is None
+            else _plane_delta_t_sequence(axes, shape, per_timepoint)
+        )
         return _write_ome_timeseries(
             tmp_path / f"synthetic_ome_{counter}.ome.tif",
             axes,

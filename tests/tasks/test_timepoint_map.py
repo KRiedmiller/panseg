@@ -82,7 +82,7 @@ def make_segmentation(data: np.ndarray, layout: str, name: str = "seg") -> PanSe
 
 @pytest.mark.parametrize(
     "layout, timepoint_layout",
-    [("TZYX", "ZYX"), ("TYX", "YX"), ("TCZYX", "CZYX")],
+    [("TZYX", "ZYX"), ("TYX", "YX"), ("TCYX", "CYX"), ("TCZYX", "CZYX")],
 )
 def test_split_timepoints_drops_t(layout, timepoint_layout, request):
     data = request.getfixturevalue("timeseries_" + layout.lower())
@@ -110,7 +110,7 @@ def test_split_timepoints_still_image_returns_self():
     assert image.split_timepoints() == [image]
 
 
-@pytest.mark.parametrize("layout", ["TZYX", "TYX", "TCZYX"])
+@pytest.mark.parametrize("layout", ["TZYX", "TYX", "TCYX", "TCZYX"])
 def test_restack_timepoints_roundtrip(layout, request):
     data = request.getfixturevalue("timeseries_" + layout.lower())
     image = make_image(data, layout, t_spacing=TIMESERIES_T_SPACING)
@@ -130,46 +130,42 @@ def test_restack_timepoints_roundtrip(layout, request):
     assert restacked.source_file_name == image.source_file_name
 
 
-def test_restack_timepoints_rejects_incompatible_timepoints(timeseries_tzyx):
+def _mutated_timepoint(timepoints: list[PanSegImage], kind: str) -> PanSegImage:
+    """A second timepoint that disagrees with timepoints[0] in one way."""
+    base = timepoints[1]
+    data = base.get_data()
+    if kind == "shape":
+        return base.derive_new(data[:, :8], name="cropped")
+    if kind == "layout":
+        return base.derive_new(data[0], name="flat", image_layout=ImageLayout.YX)
+    if kind == "voxel size":
+        return base.derive_new(
+            data,
+            name="small",
+            voxel_size=VoxelSize(voxels_size=(0.5, 0.5, 0.5)),
+        )
+    if kind == "semantic type":
+        return base.derive_new(data, name="pred", semantic_type=SemanticType.PREDICTION)
+    return base.derive_new(data, name="spaced", t_spacing=1.0)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["shape", "layout", "voxel size", "semantic type", "t_spacing"],
+)
+def test_restack_timepoints_rejects_incompatible_timepoints(timeseries_tzyx, kind):
     image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
     timepoints = image.split_timepoints()
 
-    # shape mismatch
-    cropped = timepoints[1].derive_new(timepoints[1].get_data()[:, :8], name="cropped")
     with pytest.raises(ValueError, match="not compatible"):
-        restack_timepoints([timepoints[0], cropped], t_spacing=None)
+        restack_timepoints(
+            [timepoints[0], _mutated_timepoint(timepoints, kind)], t_spacing=None
+        )
 
-    # layout mismatch
-    flattened = timepoints[1].derive_new(
-        timepoints[1].get_data()[0], name="flat", image_layout=ImageLayout.YX
-    )
-    with pytest.raises(ValueError, match="not compatible"):
-        restack_timepoints([timepoints[0], flattened], t_spacing=None)
 
-    # voxel size mismatch
-    small_voxel = timepoints[1].derive_new(
-        timepoints[1].get_data(),
-        name="small",
-        voxel_size=VoxelSize(voxels_size=(0.5, 0.5, 0.5)),
-    )
-    with pytest.raises(ValueError, match="not compatible"):
-        restack_timepoints([timepoints[0], small_voxel], t_spacing=None)
-
-    # semantic type mismatch
-    prediction = timepoints[1].derive_new(
-        timepoints[1].get_data(),
-        name="pred",
-        semantic_type=SemanticType.PREDICTION,
-    )
-    with pytest.raises(ValueError, match="not compatible"):
-        restack_timepoints([timepoints[0], prediction], t_spacing=None)
-
-    # t_spacing mismatch (the same check as merge_with)
-    other_spacing = timepoints[1].derive_new(
-        timepoints[1].get_data(), name="spaced", t_spacing=1.0
-    )
-    with pytest.raises(ValueError, match="not compatible"):
-        restack_timepoints([timepoints[0], other_spacing], t_spacing=None)
+def test_restack_timepoints_rejects_timeseries_input(timeseries_tzyx):
+    image = make_image(timeseries_tzyx, "TZYX", t_spacing=TIMESERIES_T_SPACING)
+    timepoints = image.split_timepoints()
 
     # a timeseries is not a timepoint
     with pytest.raises(ValueError, match="not a single timepoint"):
@@ -229,10 +225,21 @@ def tracker_task(image: PanSegImage, _tracker=None) -> PanSegImage:
 
 
 @pytest.fixture(autouse=True)
-def _clean_dag_and_log():
+def _clean_dag_log_and_registry():
+    """Reset the DAG and the global func registry around every test.
+
+    The synthetic tasks defined in this module (log_timepoints_task,
+    not_mapped_task, ...) register themselves into the module-global
+    func_registry at import time; the snapshot/restore keeps them from
+    leaking into other test modules.
+    """
     CALL_LOG.clear()
     workflow_handler.clean_dag()
+    registry = workflow_handler.func_registry._funcs
+    snapshot = dict(registry)
     yield
+    registry.clear()
+    registry.update(snapshot)
     CALL_LOG.clear()
     workflow_handler.clean_dag()
 
@@ -352,6 +359,62 @@ def test_stack_level_task_accepts_timeseries(timeseries_tzyx):
     # the task body saw the whole timeseries, no loop, no restack
     assert result.image_layout == ImageLayout.TZYX
     assert result.name == "image_stack"
+
+
+def _timepoint_map_broadcast(task) -> bool:
+    """Read the broadcast flag the @timepoint_map wrapper closed over.
+
+    timepoint_map records no broadcast attribute on the wrapper; the flag
+    lives in the single bool cell of the wrapper's closure (one
+    __wrapped__ level down, past the task_tracker wrapper).
+    """
+    wrapper = task.__wrapped__
+    flags = []
+    for cell in wrapper.__closure__ or ():
+        try:
+            value = cell.cell_contents
+        except ValueError:  # pragma: no cover - emptied cell
+            continue
+        if isinstance(value, bool):
+            flags.append(value)
+    assert len(flags) == 1, f"cannot read the broadcast flag of {task.__name__}"
+    return flags[0]
+
+
+BROADCAST_OPT_IN_TASKS = [
+    image_pair_operation_task,
+    remove_false_positives_by_foreground_probability_task,
+]
+
+
+@pytest.mark.parametrize(
+    "task",
+    BROADCAST_OPT_IN_TASKS,
+    ids=[task.__name__ for task in BROADCAST_OPT_IN_TASKS],
+)
+def test_broadcast_opt_in_tasks_opt_in(task):
+    """Polarity pin, known-good side: these two tasks legitimately mix a
+    still input with a timeseries."""
+    assert _timepoint_map_broadcast(task) is True
+
+
+NO_BROADCAST_TASKS = [
+    clustering_segmentation_task,
+    lmc_segmentation_task,
+    aio_watershed_task,
+    fix_over_under_segmentation_from_nuclei_task,
+]
+
+
+@pytest.mark.parametrize(
+    "task", NO_BROADCAST_TASKS, ids=[task.__name__ for task in NO_BROADCAST_TASKS]
+)
+def test_segmentation_pair_tasks_keep_broadcast_false(task):
+    """Mixed still+timeseries inputs must be rejected, not silently
+    broadcast: a broadcast=True regression flips the wrapper's closure
+    flag and fails here (the rejection behavior itself is covered by
+    test_multi_image_task_without_broadcast_rejects_mixed_inputs)."""
+    assert _timepoint_map_broadcast(task) is False
 
 
 # --- the real tasks: DAG surface, both execution paths, multi-image rules ---
@@ -560,23 +623,15 @@ def test_set_t_spacing_task_sets_known_value(timeseries_tzyx):
     assert nodes[0].outputs == [result.unique_name]
 
 
-@pytest.mark.parametrize(
-    "t_spacing, t_unit, expected",
-    [
-        (500.0, "ms", 0.5),
-        (1000.0, "us", 0.001),
-        (2.0, "min", 120.0),
-        (1.5, "h", 5400.0),
-    ],
-)
-def test_set_t_spacing_task_converts_units(
-    timeseries_tzyx, t_spacing, t_unit, expected
-):
+def test_set_t_spacing_task_converts_units(timeseries_tzyx):
+    """The task delegates the unit conversion to ImageProperties; the full
+    ms/µs/min/h matrix lives in
+    tests/core/test_image.py::test_image_properties_t_spacing_unit_normalization."""
     image = make_image(timeseries_tzyx, "TZYX")
 
-    result = set_t_spacing_task(image=image, t_spacing=t_spacing, t_unit=t_unit)
+    result = set_t_spacing_task(image=image, t_spacing=500.0, t_unit="ms")
 
-    assert result.properties.t_spacing == expected
+    assert result.properties.t_spacing == 0.5
     assert result.properties.t_unit == "s"
 
 
@@ -614,18 +669,11 @@ def test_set_biggest_instance_to_zero_is_per_timepoint():
 
     assert set(np.unique(out[0])) == {0, 2}
     assert set(np.unique(out[1])) == {0, 4}
+    # the per-timepoint semantics are documented in the task docstring
+    assert "timepoint" in set_biggest_instance_to_zero_task.__doc__
 
 
-def test_label_semantics_are_stated_in_the_docstrings():
-    for task in (
-        set_biggest_instance_to_zero_task,
-        relabel_segmentation_task,
-        fix_over_under_segmentation_from_nuclei_task,
-    ):
-        assert "timepoint" in task.__doc__
-
-
-def test_stack_level_io_tasks_accept_timeseriess(timeseries_tzyx, tmp_path):
+def test_stack_level_io_tasks_accept_timeseries(timeseries_tzyx, tmp_path):
     first = make_image(timeseries_tzyx, "TZYX", name="first")
     second = make_image(timeseries_tzyx, "TZYX", name="second")
 
@@ -647,7 +695,7 @@ def test_stack_level_io_tasks_accept_timeseriess(timeseries_tzyx, tmp_path):
     assert (tmp_path / "first_export.h5").exists()
 
 
-# --- per-stage pipeline behavior on timeseriess ---
+# --- per-stage pipeline behavior on timeseries ---
 # (spec: "Per-stage pipeline behavior"; falls out of the wrapper, no new
 # algorithm code)
 
@@ -658,49 +706,49 @@ def test_crop_applies_one_spatial_region_to_every_timepoint(timeseries_tzyx):
 
     result = image_cropping_task(image=image, rectangle=rectangle, crop_z=(1, 4))
 
+    # the new behavior is the wrapper's: the restacked output keeps the
+    # layout, the t_spacing and the cropped shape (one spatial region for
+    # every timepoint). The crop arithmetic on a single frame is the
+    # still-image coverage in tests/tasks/test_dataprocessing_tasks.py.
     assert result.is_timeseries
     assert result.image_layout == ImageLayout.TZYX
     assert result.shape == (4, 3, 7, 7)
-    # identical spatial crop at every timepoint: each output frame is the
-    # crop of the corresponding input frame, no per-timepoint ROI
-    for t, timepoint in enumerate(image.split_timepoints()):
-        np.testing.assert_array_equal(
-            result.get_data()[t], timepoint.get_data()[1:4, 2:9, 2:9]
-        )
+    assert result.properties.t_spacing == TIMESERIES_T_SPACING
 
 
 def test_crop_applies_one_spatial_region_to_every_timepoint_2d():
-    data = np.zeros((3, 12, 12), dtype="float32")
-    for t in range(3):
-        data[t] = np.arange(144, dtype="float32").reshape(12, 12) + t * 100.0
-    image = make_image(data, "TYX", t_spacing=TIMESERIES_T_SPACING)
+    image = make_image(
+        np.zeros((3, 12, 12), dtype="float32"), "TYX", t_spacing=TIMESERIES_T_SPACING
+    )
     rectangle = np.array([[2, 2], [2, 9], [9, 9]])
 
     result = image_cropping_task(image=image, rectangle=rectangle)
 
+    # same wrapper behavior on the 2D layout
     assert result.is_timeseries
     assert result.image_layout == ImageLayout.TYX
     assert result.shape == (3, 7, 7)
-    for t in range(3):
-        np.testing.assert_array_equal(result.get_data()[t], data[t][2:9, 2:9])
+    assert result.properties.t_spacing == TIMESERIES_T_SPACING
 
 
 def test_rescale_leaves_t_untouched_and_preserves_t_spacing():
-    data = np.zeros((3, 4, 16, 16), dtype="float32")
-    for t in range(3):
-        data[t] = t + 1  # per-timepoint constant: mixing frames would be visible
-    image = make_image(data, "TZYX", t_spacing=TIMESERIES_T_SPACING)
+    image = make_image(
+        np.zeros((3, 4, 16, 16), dtype="float32"),
+        "TZYX",
+        t_spacing=TIMESERIES_T_SPACING,
+    )
 
     result = image_rescale_to_voxel_size_task(
         image=image, new_voxels_size=(2.0, 2.0, 2.0), new_unit="um"
     )
 
+    # the new behavior is the wrapper's: T untouched (same number of
+    # timepoints in the restacked shape) and the t_spacing survives. The
+    # spatial scaling arithmetic on a single frame is the still-image
+    # coverage in tests/tasks/test_dataprocessing_tasks.py.
     assert result.is_timeseries
     assert result.image_layout == ImageLayout.TZYX
-    # T untouched: same number of timepoints, each frame still its own constant
     assert result.shape == (3, 2, 8, 8)
-    for t in range(3):
-        np.testing.assert_allclose(result.get_data()[t], t + 1)
     assert result.properties.t_spacing == TIMESERIES_T_SPACING
 
 

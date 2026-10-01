@@ -383,6 +383,9 @@ SQUEEZE_CASES = [
         id="C=1 TCZYX->TZYX",
     ),
     pytest.param(
+        ImageLayout.TYX, (1, 16, 16), ImageLayout.YX, (16, 16), id="T=1 TYX->YX"
+    ),
+    pytest.param(
         ImageLayout.ZYX, (1, 16, 16), ImageLayout.YX, (16, 16), id="Z=1 ZYX->YX"
     ),
     pytest.param(
@@ -391,6 +394,13 @@ SQUEEZE_CASES = [
         ImageLayout.YX,
         (16, 16),
         id="C=1,Z=1 CZYX->YX",
+    ),
+    pytest.param(
+        ImageLayout.TCZYX,
+        (1, 1, 5, 16, 16),
+        ImageLayout.ZYX,
+        (5, 16, 16),
+        id="T=1,C=1 TCZYX->ZYX",
     ),
 ]
 
@@ -524,6 +534,26 @@ def test_panseg_image_from_napari_layer():
     assert ps_image.shape == (10, 10, 10)
     assert ps_image.voxel_size.voxels_size == voxel_size
     assert tuple(ps_image.voxel_size) == voxel_size
+
+
+def test_panseg_image_from_napari_layer_timeseries_defaults():
+    """A layer created before the time dimension carries no t_spacing/t_unit
+    keys in its metadata: it loads as a timeseries with unknown spacing."""
+    data = np.random.rand(4, 5, 16, 16).astype("float32")
+    voxel_size = (1.0, 1.0, 1.0)
+    metadata = {
+        "semantic_type": "raw",
+        "voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "original_voxel_size": {"voxels_size": voxel_size, "unit": "um"},
+        "image_layout": "TZYX",
+        "id": uuid4(),
+    }
+    napari_layer = Image(data, metadata=metadata, name="old_timeseries")
+
+    ps_image = PanSegImage.from_napari_layer(napari_layer)
+    assert ps_image.is_timeseries
+    assert ps_image.properties.t_spacing is None
+    assert ps_image.properties.t_unit == "s"
 
 
 def test_panseg_image_to_napari_layer_tuple():
@@ -815,7 +845,10 @@ def test_import_image_ome_anchor_single(file_name, layout, shape):
     assert image.properties.t_spacing is None
 
 
-def test_import_image_ome_anchor_multichannel():
+def test_import_image_ome_anchor_multichannel(mocker):
+    # C=3 > Z=2 trips the channel heuristic; pin the throttle like
+    # test_import_image_ZCYX so the metadata-driven import passes
+    mocker.patch("panseg.core.image.last_warning", new=time.time())
     images = import_image(
         path=OME_EXAMPLES / "multi-channel-4D-series.ome.tif", stack_layout="TCZYX"
     )
@@ -847,9 +880,22 @@ def test_import_image_ome_time_increment_units(
 
 
 def test_import_image_ome_uniform_plane_delta_t(make_ome_timeseries):
+    # DeltaT holds absolute times 0, 1000, 2000, 3000 ms; the uniform 1000 ms
+    # difference is the spacing, converted to 1.0 s by ImageProperties
     path = make_ome_timeseries(plane_delta_t=1000, plane_delta_t_unit="ms")
     image = import_image(path=path, stack_layout="TZYX")
     assert image.properties.t_spacing == 1.0
+    assert image.properties.t_unit == "s"
+
+
+def test_import_image_ome_constant_zero_delta_t_imports_unknown(make_ome_timeseries):
+    # regression: a constant-0.0 DeltaT must not reach the positivity guard
+    # as spacing 0.0; the file imports with unknown t_spacing instead
+    path = make_ome_timeseries(plane_delta_t=0.0, plane_delta_t_unit="ms")
+    with pytest.warns(UserWarning, match="DeltaT"):
+        image = import_image(path=path, stack_layout="TZYX")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.properties.t_spacing is None
 
 
 def test_import_image_ome_nonuniform_plane_delta_t_warns_unknown(make_ome_timeseries):
@@ -926,6 +972,34 @@ def test_import_image_tcyx_splits_channels(make_ome_timeseries):
     for image in images:
         assert image.image_layout == ImageLayout.TYX
         assert image.shape == (4, 16, 16)
+
+
+# The T-bearing multichannel branches carry the same mislabel guard as
+# CYX/CZYX: a "C" axis longer than 9 means the layout string does not match
+# the data. The module-global throttle (last_warning) must be reset or the
+# raise fires only once per 120s across tests.
+def test_import_image_tcyx_warning(mocker, make_ome_timeseries):
+    mocker.patch("panseg.core.image.last_warning", new=0.0)
+    mock_loader = mocker.patch("panseg.core.image.smart_load_with_vs")
+    mock_loader.return_value = (
+        np.random.rand(4, 10, 16, 16),
+        VoxelSize(voxels_size=(1.0, 1.0, 1.0)),
+    )
+    file = make_ome_timeseries(axes="TCYX", shape=(4, 10, 16, 16))
+    with pytest.raises(ValueError, match="Double check the stack layout"):
+        import_image(path=file, stack_layout="TCYX")
+
+
+def test_import_image_tczyx_warning(mocker, make_ome_timeseries):
+    mocker.patch("panseg.core.image.last_warning", new=0.0)
+    mock_loader = mocker.patch("panseg.core.image.smart_load_with_vs")
+    mock_loader.return_value = (
+        np.random.rand(4, 10, 5, 16, 16),
+        VoxelSize(voxels_size=(1.0, 1.0, 1.0)),
+    )
+    file = make_ome_timeseries(axes="TCZYX", shape=(4, 10, 5, 16, 16))
+    with pytest.raises(ValueError, match="Double check the stack layout"):
+        import_image(path=file, stack_layout="TCZYX")
 
 
 def test_import_image_tzyx_slicing_t_first(make_ome_timeseries):
@@ -1058,6 +1132,30 @@ def test_import_image_tczyx_non_ome_splits_channels(tmp_path):
         assert image.properties.t_spacing is None
 
 
+def _timeseries_ps_image(
+    data: np.ndarray,
+    layout: str,
+    t_spacing: float | None = None,
+    semantic_type: SemanticType = SemanticType.RAW,
+    name: str = "image",
+) -> PanSegImage:
+    """A PanSegImage on the shared timeseries skeleton: unit-ish voxel size
+    and the given layout/t_spacing; split/merge and export tests build on
+    it instead of repeating the ImageProperties boilerplate."""
+    voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.15), unit="um")
+    return PanSegImage(
+        data=data,
+        properties=ImageProperties(
+            name=name,
+            semantic_type=semantic_type,
+            voxel_size=voxel_size,
+            image_layout=ImageLayout(layout),
+            original_voxel_size=voxel_size,
+            t_spacing=t_spacing,
+        ),
+    )
+
+
 def test_split_image_CZYX():
     data = np.random.rand(3, 9, 10, 11)
     voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 1.0), unit="um")
@@ -1119,17 +1217,9 @@ def test_split_image_CYX():
 
 
 def test_split_image_TCZYX():
-    data = np.random.rand(7, 3, 5, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(0.5, 1.0, 1.0), unit="um")
-    image_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TCZYX,
-        original_voxel_size=voxel_size,
-        t_spacing=0.5,
+    ps_image = _timeseries_ps_image(
+        np.random.rand(7, 3, 5, 16, 16), "TCZYX", t_spacing=0.5
     )
-    ps_image = PanSegImage(data, image_props)
     splits = ps_image.split_channels()
 
     assert len(splits) == 3
@@ -1141,17 +1231,7 @@ def test_split_image_TCZYX():
 
 
 def test_split_image_TCYX():
-    data = np.random.rand(7, 4, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    image_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TCYX,
-        original_voxel_size=voxel_size,
-        t_spacing=0.5,
-    )
-    ps_image = PanSegImage(data, image_props)
+    ps_image = _timeseries_ps_image(np.random.rand(7, 4, 16, 16), "TCYX", t_spacing=0.5)
     splits = ps_image.split_channels()
 
     assert len(splits) == 4
@@ -1163,27 +1243,10 @@ def test_split_image_TCYX():
 
 
 def test_split_image_TZYX_not_split():
-    data = np.random.rand(7, 5, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    image_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
-    )
-    ps_image = PanSegImage(data, image_props)
+    ps_image = _timeseries_ps_image(np.random.rand(7, 5, 16, 16), "TZYX")
     assert ps_image.split_channels() == [ps_image]
 
-    data = np.random.rand(7, 16, 16)
-    image_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TYX,
-        original_voxel_size=voxel_size,
-    )
-    ps_image = PanSegImage(data, image_props)
+    ps_image = _timeseries_ps_image(np.random.rand(7, 16, 16), "TYX")
     assert ps_image.split_channels() == [ps_image]
 
 
@@ -1269,18 +1332,12 @@ def test_merge_images_3dc():
 
 
 def test_merge_timeseries_matching_t_spacing():
-    data = np.random.rand(7, 5, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    image_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
-        t_spacing=10.0,
+    ps_image_1 = _timeseries_ps_image(
+        np.random.rand(7, 5, 16, 16), "TZYX", t_spacing=10.0
     )
-    ps_image_1 = PanSegImage(data, image_props)
-    ps_image_2 = PanSegImage(data, image_props)
+    ps_image_2 = _timeseries_ps_image(
+        np.random.rand(7, 5, 16, 16), "TZYX", t_spacing=10.0
+    )
 
     merged = ps_image_1.merge_with(ps_image_2)
     assert merged.image_layout == ImageLayout.TCZYX
@@ -1295,18 +1352,8 @@ def test_merge_timeseries_matching_t_spacing():
 
 
 def test_merge_timeseries_2d():
-    data = np.random.rand(7, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    image_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TYX,
-        original_voxel_size=voxel_size,
-        t_spacing=5.0,
-    )
-    ps_image_1 = PanSegImage(data, image_props)
-    ps_image_2 = PanSegImage(data, image_props)
+    ps_image_1 = _timeseries_ps_image(np.random.rand(7, 16, 16), "TYX", t_spacing=5.0)
+    ps_image_2 = _timeseries_ps_image(np.random.rand(7, 16, 16), "TYX", t_spacing=5.0)
 
     merged = ps_image_1.merge_with(ps_image_2)
     assert merged.image_layout == ImageLayout.TCYX
@@ -1316,68 +1363,30 @@ def test_merge_timeseries_2d():
 
 
 def test_merge_timeseries_mismatched_t_spacing():
-    data = np.random.rand(7, 5, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    image_props_1 = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
-        t_spacing=10.0,
+    ps_image_1 = _timeseries_ps_image(
+        np.random.rand(7, 5, 16, 16), "TZYX", t_spacing=10.0
     )
-    image_props_2 = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
-        t_spacing=20.0,
+    ps_image_2 = _timeseries_ps_image(
+        np.random.rand(7, 5, 16, 16), "TZYX", t_spacing=20.0
     )
-    ps_image_1 = PanSegImage(data, image_props_1)
-    ps_image_2 = PanSegImage(data, image_props_2)
 
     with pytest.raises(ValueError):
         ps_image_1.merge_with(ps_image_2)
 
 
 def test_merge_timeseries_set_vs_unknown_t_spacing():
-    data = np.random.rand(7, 5, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    image_props_known = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
-        t_spacing=10.0,
+    ps_image_1 = _timeseries_ps_image(
+        np.random.rand(7, 5, 16, 16), "TZYX", t_spacing=10.0
     )
-    image_props_unknown = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
-    )
-    ps_image_1 = PanSegImage(data, image_props_known)
-    ps_image_2 = PanSegImage(data, image_props_unknown)
+    ps_image_2 = _timeseries_ps_image(np.random.rand(7, 5, 16, 16), "TZYX")
 
     with pytest.raises(ValueError):
         ps_image_1.merge_with(ps_image_2)
 
 
 def test_merge_timeseries_both_unknown_t_spacing():
-    data = np.random.rand(7, 5, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    image_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
-    )
-    ps_image_1 = PanSegImage(data, image_props)
-    ps_image_2 = PanSegImage(data, image_props)
+    ps_image_1 = _timeseries_ps_image(np.random.rand(7, 5, 16, 16), "TZYX")
+    ps_image_2 = _timeseries_ps_image(np.random.rand(7, 5, 16, 16), "TZYX")
 
     merged = ps_image_1.merge_with(ps_image_2)
     assert merged.image_layout == ImageLayout.TCZYX
@@ -1386,25 +1395,8 @@ def test_merge_timeseries_both_unknown_t_spacing():
 
 
 def test_merge_timeseries_vs_still():
-    data_3d = np.random.rand(7, 5, 16, 16)
-    data_still = np.random.rand(5, 16, 16)
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    timeseries_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.TZYX,
-        original_voxel_size=voxel_size,
-    )
-    still_props = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=voxel_size,
-        image_layout=ImageLayout.ZYX,
-        original_voxel_size=voxel_size,
-    )
-    ps_timeseries = PanSegImage(data_3d, timeseries_props)
-    ps_still = PanSegImage(data_still, still_props)
+    ps_timeseries = _timeseries_ps_image(np.random.rand(7, 5, 16, 16), "TZYX")
+    ps_still = _timeseries_ps_image(np.random.rand(5, 16, 16), "ZYX")
 
     with pytest.raises(ValueError):
         ps_timeseries.merge_with(ps_still)
@@ -1743,22 +1735,8 @@ def test_timeseries_segmentation_fixture(timeseries_segmentation):
 
 
 # --- Time-aware export (ticket 14): a time-bearing image roundtrips through
-# save_image/import_image with layout and t_spacing preserved. ---
-
-
-def _timeseries_ps_image(data, layout, t_spacing=None):
-    voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.15), unit="um")
-    return PanSegImage(
-        data=data,
-        properties=ImageProperties(
-            name="timeseries",
-            semantic_type=SemanticType.SEGMENTATION,
-            voxel_size=voxel_size,
-            image_layout=ImageLayout(layout),
-            original_voxel_size=voxel_size,
-            t_spacing=t_spacing,
-        ),
-    )
+# save_image/import_image with layout and t_spacing preserved; _timeseries_ps_image
+# (defined with the split tests above) supplies the images. ---
 
 
 @pytest.mark.parametrize(
@@ -1778,7 +1756,9 @@ def test_save_image_timeseries_roundtrip(
         data = timeseries_segmentation[:, 0]
     else:
         data = timeseries_segmentation
-    image = _timeseries_ps_image(data, layout, t_spacing=t_spacing)
+    image = _timeseries_ps_image(
+        data, layout, t_spacing=t_spacing, semantic_type=SemanticType.SEGMENTATION
+    )
     save_image(
         image,
         tmp_path,
@@ -1811,48 +1791,24 @@ def test_save_image_timeseries_roundtrip(
     assert imported.properties.t_unit == "s"
     assert np.array_equal(imported.get_data(), data)
 
-
-def test_save_image_h5_writes_axis_order_on_every_export(tmp_path):
-    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
-    image = PanSegImage(
-        np.zeros((5, 16, 16), dtype="uint16"),
-        ImageProperties(
-            name="seg",
-            semantic_type=SemanticType.SEGMENTATION,
-            voxel_size=voxel_size,
-            image_layout=ImageLayout.ZYX,
-            original_voxel_size=voxel_size,
-        ),
-    )
-    save_image(
-        image,
-        tmp_path,
-        "seg",
-        key="segmentation",
-        export_format="h5",
-        data_type="uint16",
-    )
-    out = tmp_path / "seg.h5"
-    assert read_h5_axis_order(out, key="segmentation") == "ZYX"
-    assert read_h5_time_spacing(out, key="segmentation") == (None, "s")
-
-
-def test_to_h5_writes_axis_order_and_time_attrs(tmp_path, timeseries_segmentation):
-    image = _timeseries_ps_image(timeseries_segmentation, "TZYX", t_spacing=10.0)
-    out = tmp_path / "out.h5"
-    image.to_h5(out, "segmentation")
-    assert read_h5_axis_order(out, key="segmentation") == "TZYX"
-    assert read_h5_time_spacing(out, key="segmentation") == (10.0, "s")
-    reloaded = PanSegImage.from_h5(out, "segmentation")
-    assert reloaded.image_layout == ImageLayout.TZYX
-    assert reloaded.properties.t_spacing == 10.0
+    if export_format == "h5":
+        # save_image delegates to create_h5 (attr writing covered in
+        # tests/io/test_h5.py); here the layout and time attrs survive on
+        # the core-layer export path
+        assert read_h5_axis_order(path, key="segmentation") == layout
+        assert read_h5_time_spacing(path, key="segmentation") == (t_spacing, "s")
 
 
 @pytest.mark.parametrize("export_format", ["jpg", "png"])
 def test_save_image_timeseries_rejects_pil_formats(
     tmp_path, timeseries_segmentation, export_format
 ):
-    image = _timeseries_ps_image(timeseries_segmentation, "TZYX", t_spacing=10.0)
+    image = _timeseries_ps_image(
+        timeseries_segmentation,
+        "TZYX",
+        t_spacing=10.0,
+        semantic_type=SemanticType.SEGMENTATION,
+    )
     with pytest.raises(
         ValueError, match=f"Export format {export_format} not recognized"
     ):

@@ -1116,6 +1116,14 @@ def import_image(
             images.append(PanSegImage(data=data[ch], properties=image_properties))
 
     elif image_layout is ImageLayout.TCYX:
+        if (data.shape[1] > min(data.shape[2:]) or data.shape[1] > 9) and (
+            time.time() - last_warning
+        ) > 120:
+            last_warning = time.time()
+            raise ValueError(
+                f"Double check the stack layout and try again!\nData shape {original_data_shape}"
+            )
+
         for ch in range(data.shape[1]):
             image_properties = ImageProperties(
                 name=image_name + f"_{ch}",
@@ -1130,6 +1138,14 @@ def import_image(
             images.append(PanSegImage(data=data[:, ch], properties=image_properties))
 
     elif image_layout is ImageLayout.TCZYX:
+        if (data.shape[1] > min(data.shape[2:]) or data.shape[1] > 9) and (
+            time.time() - last_warning
+        ) > 120:
+            last_warning = time.time()
+            raise ValueError(
+                f"Double check the stack layout and try again!\nData shape {original_data_shape}"
+            )
+
         for ch in range(data.shape[1]):
             image_properties = ImageProperties(
                 name=image_name + f"_{ch}",

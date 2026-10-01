@@ -415,7 +415,17 @@ def test_ome_timeseries_uniform_plane_delta_t(make_ome_timeseries):
     assert pixels.get("TimeIncrement") is None
     planes = [e for e in pixels if e.tag.endswith("Plane")]
     assert len(planes) == 4 * 5
-    assert all(p.get("DeltaT") == "1000" for p in planes)
+    per_timepoint = {}
+    for p in planes:
+        per_timepoint.setdefault(p.get("TheT"), set()).add(p.get("DeltaT"))
+    # realistic absolute acquisition times: the first plane of timepoint i
+    # sits at i * 1000 ms
+    assert per_timepoint == {
+        "0": {"0"},
+        "1": {"1000"},
+        "2": {"2000"},
+        "3": {"3000"},
+    }
     assert all(p.get("DeltaTUnit") == "ms" for p in planes)
 
 
@@ -430,11 +440,12 @@ def test_ome_timeseries_nonuniform_plane_delta_t(make_ome_timeseries):
         if p.tag.endswith("Plane"):
             per_timepoint.setdefault(p.get("TheT"), set()).add(p.get("DeltaT"))
     assert len(per_timepoint) == 4
-    assert {min(values) for values in per_timepoint.values()} == {
-        "1000",
-        "2000",
-        "3000",
-        "4000",
+    # absolute times whose first-plane differences are non-uniform
+    assert per_timepoint == {
+        "0": {"0"},
+        "1": {"1000"},
+        "2": {"3000"},
+        "3": {"7000"},
     }
 
 
@@ -484,8 +495,50 @@ def test_read_ome_time_spacing_time_increment(make_ome_timeseries, unit):
 
 
 def test_read_ome_time_spacing_uniform_plane_delta_t(make_ome_timeseries):
+    # DeltaT holds absolute times 0, 1000, 2000, 3000 ms; the spacing is
+    # recovered as their uniform difference, not read directly
     path = make_ome_timeseries(plane_delta_t=1000, plane_delta_t_unit="ms")
     assert read_ome_time_spacing(path) == (1000.0, "ms")
+
+
+def test_read_ome_time_spacing_delta_t_offset_is_differenced_away(
+    make_ome_timeseries,
+):
+    # absolute times not starting at 0: only the differences matter
+    path = make_ome_timeseries(
+        plane_delta_t=[5, 1005, 2005, 3005], plane_delta_t_unit="ms"
+    )
+    assert read_ome_time_spacing(path) == (1000.0, "ms")
+
+
+def test_read_ome_time_spacing_constant_zero_delta_t_warns_unknown(
+    make_ome_timeseries,
+):
+    # constant DeltaT of 0.0 (all absolute times zero) is not a positive
+    # spacing: warn and treat as missing, never return 0.0
+    path = make_ome_timeseries(plane_delta_t=0.0, plane_delta_t_unit="ms")
+    with pytest.warns(UserWarning, match="DeltaT"):
+        assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_partial_delta_t_warns_unknown(make_ome_timeseries):
+    # planes documented for every timepoint, but DeltaT absent on one of them
+    path = make_ome_timeseries(
+        plane_delta_t=[0, None, 2000, 3000], plane_delta_t_unit="ms"
+    )
+    with pytest.warns(UserWarning, match="DeltaT"):
+        assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_single_timepoint_delta_t_warns_unknown(
+    make_ome_timeseries,
+):
+    # a single timepoint carries no difference to recover a spacing from
+    path = make_ome_timeseries(
+        axes="TYX", shape=(1, 16, 16), plane_delta_t=1000, plane_delta_t_unit="ms"
+    )
+    with pytest.warns(UserWarning, match="DeltaT"):
+        assert read_ome_time_spacing(path) == (None, "s")
 
 
 def test_read_ome_time_spacing_nonuniform_plane_delta_t(make_ome_timeseries):
@@ -567,27 +620,27 @@ def test_check_ome_single_file_ignores_non_ome(tmp_path):
 # as OME-TIFF (the ImageJ branch stays time-less), T fills the T slot of the
 # TZCYXS order, TimeIncrement is written only when the spacing is known. ---
 
+# Layouts and shapes of the time-bearing exports (every layout writes a
+# 4-timepoint file). The per-layout SizeT/SizeC/SizeZ attribute expectations
+# live in TIMESERIES_EXPORT_PIXEL_SIZES and are consumed only by
+# test_create_tiff_timeseries_ome_pixel_sizes.
 TIMESERIES_EXPORT_CASES = [
-    pytest.param(
-        "TYX", (4, 16, 16), {"SizeT": "4", "SizeC": "1", "SizeZ": "1"}, id="TYX"
-    ),
-    pytest.param(
-        "TCYX", (4, 2, 16, 16), {"SizeT": "4", "SizeC": "2", "SizeZ": "1"}, id="TCYX"
-    ),
-    pytest.param(
-        "TZYX", (4, 5, 16, 16), {"SizeT": "4", "SizeC": "1", "SizeZ": "5"}, id="TZYX"
-    ),
-    pytest.param(
-        "TCZYX",
-        (4, 2, 5, 16, 16),
-        {"SizeT": "4", "SizeC": "2", "SizeZ": "5"},
-        id="TCZYX",
-    ),
+    pytest.param("TYX", (4, 16, 16), id="TYX"),
+    pytest.param("TCYX", (4, 2, 16, 16), id="TCYX"),
+    pytest.param("TZYX", (4, 5, 16, 16), id="TZYX"),
+    pytest.param("TCZYX", (4, 2, 5, 16, 16), id="TCZYX"),
 ]
 
+TIMESERIES_EXPORT_PIXEL_SIZES = {
+    "TYX": {"SizeT": "4", "SizeC": "1", "SizeZ": "1"},
+    "TCYX": {"SizeT": "4", "SizeC": "2", "SizeZ": "1"},
+    "TZYX": {"SizeT": "4", "SizeC": "1", "SizeZ": "5"},
+    "TCZYX": {"SizeT": "4", "SizeC": "2", "SizeZ": "5"},
+}
 
-@pytest.mark.parametrize("layout,shape,_sizes", TIMESERIES_EXPORT_CASES)
-def test_create_tiff_timeseries_layouts_write_ome(tmp_path, layout, shape, _sizes):
+
+@pytest.mark.parametrize("layout,shape", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_layouts_write_ome(tmp_path, layout, shape):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
     out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, VoxelSize(voxels_size=(1.0, 1.0, 1.0)), layout=layout)
@@ -599,21 +652,21 @@ def test_create_tiff_timeseries_layouts_write_ome(tmp_path, layout, shape, _size
     assert np.array_equal(loaded, data)
 
 
-@pytest.mark.parametrize("layout,shape,sizes", TIMESERIES_EXPORT_CASES)
-def test_create_tiff_timeseries_ome_pixel_sizes(tmp_path, layout, shape, sizes):
+@pytest.mark.parametrize("layout,shape", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_ome_pixel_sizes(tmp_path, layout, shape):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
     out = tmp_path / "out.ome.tiff"
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
     create_tiff(out, data, voxel_size, layout=layout)
     with tifffile.TiffFile(out) as tiff:
         pixels = _ome_pixels(ElementTree.fromstring(tiff.ome_metadata))
-    for key, value in sizes.items():
+    for key, value in TIMESERIES_EXPORT_PIXEL_SIZES[layout].items():
         assert pixels.get(key) == value
     assert _assert_no_warnings(read_tiff_voxel_size, out) == voxel_size
 
 
-@pytest.mark.parametrize("layout,shape,_sizes", TIMESERIES_EXPORT_CASES)
-def test_create_tiff_timeseries_time_increment(tmp_path, layout, shape, _sizes):
+@pytest.mark.parametrize("layout,shape", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_time_increment(tmp_path, layout, shape):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
     out = tmp_path / "out.ome.tiff"
     create_tiff(
@@ -631,9 +684,9 @@ def test_create_tiff_timeseries_time_increment(tmp_path, layout, shape, _sizes):
     assert read_ome_time_spacing(out) == (10.5, "s")
 
 
-@pytest.mark.parametrize("layout,shape,_sizes", TIMESERIES_EXPORT_CASES)
+@pytest.mark.parametrize("layout,shape", TIMESERIES_EXPORT_CASES)
 def test_create_tiff_timeseries_unknown_t_spacing_no_time_metadata(
-    tmp_path, layout, shape, _sizes
+    tmp_path, layout, shape
 ):
     data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
     out = tmp_path / "out.ome.tiff"

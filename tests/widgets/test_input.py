@@ -323,54 +323,38 @@ def test_details_info_omits_time_spacing_for_still_image(input_tab, napari_raw):
     assert "Time spacing" not in input_tab.widget_info.value
 
 
+# The stack-layout prefill is pure wiring: a path change copies the io
+# layer's guess into the field. The guessing itself (reader axes, file
+# attrs, shape heuristics) is covered in tests/io; this pins the wiring
+# over one representative source per guess path.
 @pytest.mark.parametrize(
-    "file_name, axes",
+    "source, expected",
     [
-        ("time-series.ome.tif", "TYX"),
-        ("4D-series.ome.tif", "TZYX"),
-        ("multi-channel-4D-series.ome.tif", "TCZYX"),
+        pytest.param("ome_anchor", "TZYX", id="ome_reader_axes"),
+        pytest.param("h5_axis_order", "TZYX", id="h5_axis_order"),
+        pytest.param("tiff_shape", "ZYX", id="tiff_shape_heuristic"),
+        pytest.param("h5_old", "", id="h5_no_guess"),
     ],
 )
-def test_update_stack_layout_ome_prefill_from_reader_axes(input_tab, file_name, axes):
-    input_tab.widget_open_file.path.value = OME_EXAMPLES / file_name
-    assert input_tab.widget_open_file.stack_layout.value == axes
+def test_path_change_copies_io_guess_into_stack_layout(
+    input_tab, tmp_path, source, expected
+):
+    if source == "ome_anchor":
+        path = OME_EXAMPLES / "4D-series.ome.tif"
+    elif source == "h5_axis_order":
+        path = tmp_path / "timeseries.h5"
+        create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+        with h5py.File(path, "a") as f:
+            f["raw"].attrs["axis_order"] = "TZYX"
+    elif source == "tiff_shape":
+        path = tmp_path / "out.tiff"
+        create_tiff(path, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    else:
+        path = tmp_path / "old.h5"
+        create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
 
-
-def test_update_stack_layout_ome_synthetic_prefill(input_tab, make_ome_timeseries):
-    input_tab.widget_open_file.path.value = make_ome_timeseries()
-    assert input_tab.widget_open_file.stack_layout.value == "TZYX"
-
-
-def test_update_stack_layout_non_ome_tiff_shape_heuristic(input_tab, tmp_path):
-    path = tmp_path / "out.tiff"
-    create_tiff(path, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
     input_tab.widget_open_file.path.value = path
-    assert input_tab.widget_open_file.stack_layout.value == "ZYX"
-
-
-def test_update_stack_layout_non_ome_tiff_4d_no_small_dim_no_crash(input_tab, tmp_path):
-    path = tmp_path / "out.tiff"
-    create_tiff(
-        path, np.empty((10, 12, 16, 24), dtype="float32"), VoxelSize(), layout="ZCYX"
-    )
-    input_tab.widget_open_file.path.value = path
-    assert input_tab.widget_open_file.stack_layout.value == ""
-
-
-def test_update_stack_layout_h5_axis_order_prefill(input_tab, tmp_path):
-    path = tmp_path / "timeseries.h5"
-    create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
-    with h5py.File(path, "a") as f:
-        f["raw"].attrs["axis_order"] = "TZYX"
-    input_tab.widget_open_file.path.value = path
-    assert input_tab.widget_open_file.stack_layout.value == "TZYX"
-
-
-def test_update_stack_layout_h5_old_file_shape_heuristic(input_tab, tmp_path):
-    path = tmp_path / "old.h5"
-    create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
-    input_tab.widget_open_file.path.value = path
-    assert input_tab.widget_open_file.stack_layout.value == ""
+    assert input_tab.widget_open_file.stack_layout.value == expected
 
 
 def test_on_path_changed(input_tab, mocker):

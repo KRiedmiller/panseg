@@ -209,12 +209,18 @@ def read_ome_time_spacing(path: Path) -> tuple[Optional[float], str]:
     """
     Return the time spacing of an OME-TIFF file as (value, unit).
 
-    Pixels.TimeIncrement is used when present; otherwise the DeltaT of the
-    first plane of each timepoint, which must be uniform across timepoints
-    (non-uniform values warn and are treated as missing). The value is
-    expressed in the file's unit; conversion to the canonical unit seconds
-    happens at ImageProperties construction. Returns (None, "s") for
-    non-OME files and for files without timing metadata.
+    Pixels.TimeIncrement is used when present. Otherwise the spacing is
+    recovered from Plane.DeltaT, which holds the ABSOLUTE time of a plane
+    since the start of the acquisition rather than an increment between
+    timepoints: the DeltaT of the first documented plane of each timepoint
+    (document order is assumed to equal plane raster order) is collected
+    and the spacing is the uniform consecutive difference of those values.
+    A single timepoint, a timepoint documented without DeltaT, or
+    non-uniform or non-positive differences warn and are treated as
+    missing. The value is expressed in the file's unit; conversion to the
+    canonical unit seconds happens at ImageProperties construction.
+    Returns (None, "s") for non-OME files and for files without timing
+    metadata.
 
     Args:
         path (Path): path to the tiff file
@@ -242,23 +248,45 @@ def read_ome_time_spacing(path: Path) -> tuple[Optional[float], str]:
     if not first_planes:
         return None, "s"
 
-    values = []
-    for plane in first_planes.values():
-        delta_t = plane.get("DeltaT")
-        if delta_t is None:
-            return None, "s"
-        values.append(float(delta_t))
-
     unit = next(iter(first_planes.values())).get("DeltaTUnit", "s")
 
-    if not np.allclose(values, values[0]):
+    # DeltaT is an absolute time since acquisition start, not an increment:
+    # the spacing between timepoints is recovered by differencing the
+    # first-plane values instead of reading them directly
+    values, missing = [], []
+    for the_t, plane in first_planes.items():
+        delta_t = plane.get("DeltaT")
+        if delta_t is None:
+            missing.append(the_t)
+        else:
+            values.append(float(delta_t))
+
+    if missing:
         warnings.warn(
-            f"Non-uniform Plane.DeltaT across timepoints {values}, "
+            f"Plane.DeltaT missing for timepoint(s) {missing} "
+            "(planes documented without DeltaT), "
             "treating the time spacing as missing"
         )
         return None, "s"
 
-    return values[0], unit
+    if len(values) < 2:
+        warnings.warn(
+            f"Plane.DeltaT present for a single timepoint only ({values[0]}), "
+            "a time spacing cannot be derived from it, "
+            "treating the time spacing as missing"
+        )
+        return None, "s"
+
+    diffs = np.diff(values)
+    if np.allclose(diffs, diffs[0]) and diffs[0] > 0:
+        return float(diffs[0]), unit
+
+    warnings.warn(
+        f"Non-uniform Plane.DeltaT across timepoints {values} "
+        f"(first-plane differences {diffs.tolist()}), "
+        "treating the time spacing as missing"
+    )
+    return None, "s"
 
 
 def check_ome_single_file(path: Path) -> None:

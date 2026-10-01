@@ -215,6 +215,12 @@ def test_guess_stack_layout_ome_tiff(file_name, axes):
     assert guess_stack_layout(OME_EXAMPLES / file_name) == axes
 
 
+def test_guess_stack_layout_synthetic_ome_axes(make_ome_timeseries):
+    # a synthetic OME-TIFF is guessed from its reader axes, like the
+    # committed anchors (the widget prefill only copies this guess)
+    assert guess_stack_layout(make_ome_timeseries()) == "TZYX"
+
+
 def test_guess_stack_layout_non_ome_tiff_shape_heuristic(tmp_path):
     path = tmp_path / "out.tiff"
     create_tiff(path, np.empty((10, 20, 30), dtype="float32"), VoxelSize())

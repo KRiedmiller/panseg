@@ -526,16 +526,7 @@ class TestProofreadingHandlerTimeSeries:
         assert fresh_handler.corrected_cells == {3}
         assert "Scribbles (t=1)" in viewer.layers
         assert "Correct Labels (t=1)" in viewer.layers
-
-    def test_load_timeseries_state_restores_mask(self, bound_handler, tmp_path):
-        proof, viewer, _ = bound_handler
-        proof.toggle_corrected_cell(3)
-        h5_path = tmp_path / "timeseries_state.h5"
-        proof.save_state_to_disk(h5_path, raw=None, pmap=None)
-        fresh_handler = ProofreadingHandler()
-
-        fresh_handler.load_state_from_disk(h5_path)
-
+        # the loaded state restores the corrected mask into the viewer layer
         mask = viewer.layers["Correct Labels (t=1)"].data
         assert mask[0:2, 0:2, 0:2].sum() == 8
 

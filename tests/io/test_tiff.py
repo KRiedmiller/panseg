@@ -9,6 +9,7 @@ import pytest
 import tifffile
 
 from panseg.io.tiff import (
+    check_ome_multifile_selection,
     check_ome_single_file,
     create_tiff,
     load_tiff,
@@ -614,6 +615,102 @@ def test_check_ome_single_file_ignores_non_ome(tmp_path):
     out = tmp_path / "out.tiff"
     create_tiff(out, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
     check_ome_single_file(out)
+
+
+# --- Selection-level multifile OME-TIFF guard (multi-file import spec) ---
+#
+# check_ome_multifile_selection runs before any pixel data is read over a
+# multi-file selection: a member of a chained set (or a BinaryOnly
+# placeholder) must be rejected whether the selection is complete or partial.
+
+_UUID_SELF = "urn:uuid:11111111-1111-4111-8111-111111111111"
+_UUID_OTHER = "urn:uuid:22222222-2222-4222-8222-222222222222"
+
+
+def _append_tiff_data_uuid(path, uuid_text, file_name=None):
+    """Append a TiffData entry carrying a UUID child to the OME-XML.
+
+    Mirrors the chained encoding: each file of a set documents its planes
+    with a TiffData entry whose UUID child names the file holding them.
+    """
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    image = next(e for e in root if e.tag.endswith("Image"))
+    pixels = next(e for e in image if e.tag.endswith("Pixels"))
+    tiff_data = ElementTree.SubElement(pixels, f"{{{_OME_NS}}}TiffData")
+    tiff_data.set("FirstT", "1")
+    uuid_el = ElementTree.SubElement(tiff_data, f"{{{_OME_NS}}}UUID")
+    uuid_el.text = uuid_text
+    if file_name is not None:
+        uuid_el.set("FileName", file_name)
+    ElementTree.register_namespace("", _OME_NS)
+    xml = ElementTree.tostring(root, encoding="unicode")
+    with tifffile.TiffFile(path, mode="r+") as tiff:
+        tiff.pages[0].tags["ImageDescription"].overwrite(xml.encode("ascii"))
+
+
+def test_check_ome_multifile_selection_allows_independent_ome_files(
+    make_ome_timeseries,
+):
+    first = make_ome_timeseries()
+    second = make_ome_timeseries()
+    check_ome_multifile_selection([first, second])
+
+
+def test_check_ome_multifile_selection_ignores_non_tiff(tmp_path):
+    png = tmp_path / "independent.png"
+    png.write_bytes(b"not a tiff")
+    check_ome_multifile_selection([png])
+
+
+def test_check_ome_multifile_selection_flags_multi_uuid(make_ome_timeseries):
+    """Two distinct UUIDs over one file's TiffData chain other files."""
+    path = make_ome_timeseries()
+    _set_tiff_data_uuid(path, _UUID_SELF, path.name)
+    _append_tiff_data_uuid(path, _UUID_OTHER, path.name)
+    with pytest.raises(ValueError, match="one multifile OME-TIFF series") as exc_info:
+        check_ome_multifile_selection([path])
+    assert path.name in str(exc_info.value)
+
+
+def test_check_ome_multifile_selection_flags_missing_file_name_reference(
+    make_ome_timeseries,
+):
+    """A foreign UUID without a FileName attribute still chains files."""
+    path = make_ome_timeseries()
+    _set_tiff_data_uuid(path, _UUID_SELF)
+    _append_tiff_data_uuid(path, _UUID_OTHER)
+    with pytest.raises(ValueError, match="one multifile OME-TIFF series"):
+        check_ome_multifile_selection([path])
+
+
+def test_check_ome_multifile_selection_partial_names_missing_file(
+    make_ome_timeseries,
+):
+    path = make_ome_timeseries()
+    _set_tiff_data_uuid(path, _UUID_SELF, path.name)
+    _append_tiff_data_uuid(path, _UUID_OTHER, file_name="chained.ome.tif")
+    with pytest.raises(ValueError, match="chained.ome.tif") as exc_info:
+        check_ome_multifile_selection([path])
+    assert "missing from the selection" in str(exc_info.value)
+
+
+def test_check_ome_multifile_selection_complete_chain(ome_timeseries_multifile):
+    first, second, _ = ome_timeseries_multifile
+    with pytest.raises(ValueError, match="one multifile OME-TIFF series") as exc_info:
+        check_ome_multifile_selection([first, second])
+    assert first.name in str(exc_info.value)
+    assert second.name in str(exc_info.value)
+    assert "missing from the selection" not in str(exc_info.value)
+
+
+def test_check_ome_multifile_selection_flags_binary_only(ome_binary_only_set):
+    first, second, companion = ome_binary_only_set
+    with pytest.raises(ValueError, match="BinaryOnly") as exc_info:
+        check_ome_multifile_selection([first, second, companion])
+    assert first.name in str(exc_info.value)
+    assert second.name in str(exc_info.value)
+    assert companion.name in str(exc_info.value)
 
 
 # --- Time-aware export: a time-bearing image is always written

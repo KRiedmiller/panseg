@@ -3,7 +3,7 @@ import re
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 from uuid import UUID, uuid4
 
 import h5py
@@ -14,10 +14,11 @@ from pydantic import BaseModel, model_validator
 
 import panseg.functionals.dataprocessing as dp
 from panseg.io.h5 import H5_EXTENSIONS, create_h5, read_h5_time_spacing
-from panseg.io.io import smart_load_with_vs
+from panseg.io.io import natural_sort_key, smart_load_with_vs
 from panseg.io.mesh import create_mesh
 from panseg.io.tiff import (
     TIFF_EXTENSIONS,
+    check_ome_multifile_selection,
     check_ome_single_file,
     create_tiff,
     read_ome_time_spacing,
@@ -27,6 +28,11 @@ from panseg.io.zarr import ZARR_EXTENSIONS, create_zarr, read_zarr_time_spacing
 
 logger = logging.getLogger(__name__)
 last_warning = 0.0
+
+# The default image_name of import_image: in the multi-file branch it is
+# the "not provided" sentinel, and the result is named after the first
+# sorted stem instead.
+_DEFAULT_IMAGE_NAME = "image"
 
 # Conversion factors from source time units to the canonical unit, seconds.
 _TIME_UNITS_TO_SECONDS = {
@@ -200,6 +206,10 @@ class ImageProperties(BaseModel):
         image_layout (ImageLayout): Image layout of the image
         original_voxel_size (VoxelSize): Original voxel size of the image
         source_file_name (str | None): Name of the source file
+        source_file_names (list[str] | None): Stems of all source files in
+            timepoint order, set only by multi-file import. None for every
+            single-file import, h5/zarr load and napari roundtrip of older
+            files; the first element equals source_file_name.
         t_spacing (float | None): Time spacing between timepoints.
             None means the source carried no timing metadata.
         t_unit (str): Unit of the time spacing. Normalized to "s" at
@@ -213,6 +223,7 @@ class ImageProperties(BaseModel):
     image_layout: ImageLayout
     original_voxel_size: VoxelSize
     source_file_name: str | None = None
+    source_file_names: list[str] | None = None
     t_spacing: float | None = None
     t_unit: str = "s"
 
@@ -802,6 +813,7 @@ def restack_timepoints(
     t_spacing: float | None,
     t_unit: str = "s",
     name: str | None = None,
+    source_file_names: list[str] | None = None,
 ) -> PanSegImage:
     """Restack single-timepoint images into a timeseries along a new outer T axis.
 
@@ -820,6 +832,10 @@ def restack_timepoints(
         t_unit (str): unit of the time spacing, normalized to seconds.
         name (str | None): name of the restacked image; defaults to the
             first timepoint's name plus "_restacked".
+        source_file_names (list[str] | None): stems of the source files in
+            timepoint order (the multi-file import path). None propagates
+            the first timepoint's provenance, so the split -> run ->
+            restack loop of a frame-mapped task preserves it.
     """
     if not timepoints:
         raise ValueError("Restacking needs at least one timepoint")
@@ -857,6 +873,11 @@ def restack_timepoints(
         image_layout=ImageLayout("T" + first.image_layout.value),
         original_voxel_size=first.original_voxel_size,
         source_file_name=first.source_file_name,
+        source_file_names=(
+            source_file_names
+            if source_file_names is not None
+            else first.properties.source_file_names
+        ),
         t_spacing=t_spacing,
         t_unit=t_unit,
     )
@@ -1018,18 +1039,139 @@ def crop_to_stack_layout(
     return stack_layout, data
 
 
+def _import_image_sequence(
+    paths: Sequence[Path],
+    key: str | None,
+    image_name: str,
+    semantic_type: str,
+    stack_layout: str,
+) -> PanSegImage | list[PanSegImage]:
+    """Import a selection of independent files as one time series.
+
+    Every file is one timepoint: the files are ordered by alphanumeric
+    (natural) file name, each is imported through the single-file path with
+    the same key, semantic type and (spatial) stack layout, and the results
+    are restacked per channel index with restack_timepoints. The result is
+    one PanSegImage for single-channel selections, a list of one PanSegImage
+    per channel otherwise - the same shape the channel-split single-file
+    path returns.
+
+    Args:
+        paths (Sequence[Path]): the selected file paths; str entries are
+            coerced to Path
+        key (str | None): key for h5/zarr files, forwarded to every file
+        image_name (str): name of the result; the default sentinel names it
+            after the first file in natural order
+        semantic_type (str): semantic type of the image
+        stack_layout (str): spatial stack layout applied to every file
+
+    Returns:
+        PanSegImage | list[PanSegImage]: the stacked time series, one image
+            per channel
+    """
+    paths = [Path(entry) if isinstance(entry, str) else entry for entry in paths]
+    if not paths:
+        raise ValueError(
+            "Importing a time series needs at least one file, got an empty selection"
+        )
+    if len(paths) == 1:
+        # a one-file selection imports exactly as a single path: no
+        # sorting, no selection guard, no source_file_names
+        return import_image(
+            path=paths[0],
+            key=key,
+            image_name=image_name,
+            semantic_type=semantic_type,
+            stack_layout=stack_layout,
+        )
+
+    missing = [entry for entry in paths if not entry.exists()]
+    if missing:
+        raise ValueError(
+            f"All selected files must exist, missing: {sorted(map(str, missing))}"
+        )
+
+    paths = sorted(paths, key=natural_sort_key)
+    # fail fast, before any pixel data is read: a selection can be one
+    # multifile OME-TIFF series (chained UUID/FileName references or
+    # BinaryOnly placeholders) instead of independent images
+    check_ome_multifile_selection(paths)
+
+    layout_letters, _ = split_stack_layout(stack_layout.upper())
+    if "T" in layout_letters:
+        raise ValueError(
+            f"Stacking multiple files adds the time axis; the layout must be "
+            f"spatial (got {stack_layout})"
+        )
+
+    per_file = [
+        import_image(
+            path=entry,
+            key=key,
+            image_name=entry.stem,
+            semantic_type=semantic_type,
+            stack_layout=stack_layout,
+        )
+        for entry in paths
+    ]
+
+    counts = [
+        1 if isinstance(result, PanSegImage) else len(result) for result in per_file
+    ]
+    if len(set(counts)) > 1:
+        raise ValueError(
+            "The selected files have different channel counts: "
+            + ", ".join(
+                f"{entry.stem} ({count})" for entry, count in zip(paths, counts)
+            )
+            + "; one time series is stacked per channel, so the counts must "
+            "be equal"
+        )
+
+    if image_name and image_name != _DEFAULT_IMAGE_NAME:
+        result_name = image_name
+    else:
+        result_name = paths[0].stem
+    source_file_names = [entry.stem for entry in paths]
+
+    stacked = []
+    n_channels = counts[0]
+    for index in range(n_channels):
+        images_at_index = [
+            result if isinstance(result, PanSegImage) else result[index]
+            for result in per_file
+        ]
+        stacked.append(
+            restack_timepoints(
+                images_at_index,
+                t_spacing=None,
+                t_unit="s",
+                name=result_name if n_channels == 1 else f"{result_name}_{index}",
+                source_file_names=source_file_names,
+            )
+        )
+    return stacked[0] if len(stacked) == 1 else stacked
+
+
 def import_image(
-    path: Path,
+    path: Path | Sequence[Path],
     key: str | None = None,
-    image_name: str = "image",
+    image_name: str = _DEFAULT_IMAGE_NAME,
     semantic_type: str = "raw",
     stack_layout: str = "YX",
 ) -> PanSegImage | list[PanSegImage]:
     """
     Open an image file and create a PanSegImage object.
 
+    A sequence of paths (multi-file import) is stacked as one time series:
+    each file is one timepoint, the files are ordered by alphanumeric
+    (natural) file name, and the stack layout applies spatially to every
+    file (a t letter is rejected - stacking adds T). The stems of the
+    source files are recorded in ImageProperties.source_file_names.
+
     Args:
-        path (Path): Path to the image file
+        path (Path | Sequence[Path]): path to the image file, or a
+            selection of paths to stack as one time series
         key (Optional[str]): Key to load data from h5 or zarr files
         image_name (str): Name of the image (a unique name to identify the image)
         semantic_type (str): Semantic type of the image, should be raw,
@@ -1040,6 +1182,16 @@ def import_image(
             data before the axes are reordered.
     """
     global last_warning
+    if isinstance(path, str):
+        path = Path(path)
+    if not isinstance(path, Path):
+        return _import_image_sequence(
+            path,
+            key=key,
+            image_name=image_name,
+            semantic_type=semantic_type,
+            stack_layout=stack_layout,
+        )
     stack_layout, slicing = split_stack_layout(stack_layout.upper())
     is_tiff = path.suffix.lower() in TIFF_EXTENSIONS
     if is_tiff:

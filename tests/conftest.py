@@ -17,6 +17,8 @@ from napari.layers import Image, Labels, Shapes
 
 from panseg.core.image import SemanticType
 from panseg.io.io import smart_load
+from panseg.io.tiff import create_tiff
+from panseg.io.voxelsize import VoxelSize
 
 TEST_FILES = Path(__file__).resolve().parent / "resources"
 VOXEL_SIZE = (0.235, 0.15, 0.15)
@@ -731,3 +733,71 @@ def ome_timeseries_multifile(tmp_path):
     Returns (first_path, second_path, full_timeseries_data).
     """
     return _ome_multifile_chain(tmp_path)
+
+
+def _ome_binary_only_set(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Two BinaryOnly placeholder OME-TIFFs plus the .companion.ome file.
+
+    In a companion-file OME-TIFF set the OME-XML lives outside the TIFFs:
+    each placeholder file's ImageDescription is a bare BinaryOnly element
+    naming the companion file. The reader does not classify such a
+    description as OME metadata (no ome_metadata, no Pixels element), so
+    the placeholders look like ordinary TIFFs to every per-file reader.
+    """
+    rng = np.random.default_rng(43)
+    data = (rng.random((16, 16)) * 4096).astype("uint16")
+    first = tmp_path / "binary_only_first.ome.tif"
+    second = tmp_path / "binary_only_second.ome.tif"
+    companion = tmp_path / "binary_only.companion.ome"
+    companion.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<OME xmlns="{_OME_XML_NS}" '
+        'UUID="urn:uuid:33333333-3333-4333-8333-333333333333"></OME>'
+    )
+    for path, uuid_text in (
+        (first, "urn:uuid:44444444-4444-4444-8444-444444444444"),
+        (second, "urn:uuid:55555555-5555-4555-8555-555555555555"),
+    ):
+        tifffile.imwrite(
+            path, data, ome=True, photometric="minisblack", metadata={"axes": "YX"}
+        )
+        root = ElementTree.Element(f"{{{_OME_XML_NS}}}BinaryOnly")
+        root.set("MetadataFile", companion.name)
+        root.set("UUID", uuid_text)
+        ElementTree.register_namespace("", _OME_XML_NS)
+        xml = '<?xml version="1.0" encoding="UTF-8"?>' + ElementTree.tostring(
+            root, encoding="unicode"
+        )
+        with tifffile.TiffFile(path, mode="r+") as tiff:
+            tiff.pages[0].tags["ImageDescription"].overwrite(xml.encode("ascii"))
+    return first, second, companion
+
+
+@pytest.fixture
+def ome_binary_only_set(tmp_path):
+    """Two BinaryOnly placeholder OME-TIFFs plus their .companion.ome file.
+
+    Returns (first_path, second_path, companion_path).
+    """
+    return _ome_binary_only_set(tmp_path)
+
+
+def write_still_tiff(
+    path: Path,
+    shape: tuple[int, ...],
+    value: int,
+    voxel_size: VoxelSize | None = None,
+) -> Path:
+    """One independent still file, its voxels filled with ``value``.
+
+    The layout follows the shape: 2D writes YX, 3D writes ZYX. Used by the
+    multi-file import tests to build selections with controlled stems,
+    values and voxel sizes.
+    """
+    create_tiff(
+        path,
+        np.full(shape, value, dtype="uint16"),
+        voxel_size or VoxelSize(),
+        layout="YX" if len(shape) == 2 else "ZYX",
+    )
+    return path

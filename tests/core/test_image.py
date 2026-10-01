@@ -1,9 +1,11 @@
+import json
 import time
 from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
 import pytest
+import tifffile
 from napari.layers import Image
 
 from panseg.core.image import (
@@ -15,16 +17,19 @@ from panseg.core.image import (
     SemanticType,
     crop_to_stack_layout,
     import_image,
+    restack_timepoints,
     save_image,
     split_stack_layout,
     stack_sort,
 )
 from panseg.io.h5 import create_h5, read_h5_axis_order, read_h5_time_spacing
 from panseg.io.io import guess_stack_layout
+from panseg.io.tiff import create_tiff, load_tiff
 from panseg.io.voxelsize import VoxelSize
 from tests.conftest import (
     TIMESERIES_PROPS_KNOWN_T_SPACING,
     TIMESERIES_PROPS_UNKNOWN_T_SPACING,
+    write_still_tiff,
 )
 
 
@@ -1875,3 +1880,263 @@ def test_save_image_timeseries_rejects_pil_formats(
             data_type="uint16",
         )
     assert list(tmp_path.iterdir()) == []
+
+
+# --- Multi-file time series import (multifile-timeseries-import spec) ---
+
+
+def test_import_image_sequence_yx_stacks_natural_order(tmp_path):
+    """Timepoint k is the k-th file in alphanumeric filename order."""
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
+        for stem, value in (("a10", 10), ("a2", 2), ("a1", 1))
+    ]
+    image = import_image(path=paths, semantic_type="segmentation", stack_layout="YX")
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TYX
+    assert image.properties.t_spacing is None
+    np.testing.assert_array_equal(image.get_data()[0], np.full((8, 8), 1))
+    np.testing.assert_array_equal(image.get_data()[1], np.full((8, 8), 2))
+    np.testing.assert_array_equal(image.get_data()[2], np.full((8, 8), 10))
+
+
+def test_import_image_sequence_zyx_stacks_tzyx(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (2, 8, 8), value)
+        for stem, value in (("a1", 1), ("a2", 2))
+    ]
+    image = import_image(path=paths, semantic_type="segmentation", stack_layout="ZYX")
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TZYX
+    np.testing.assert_array_equal(image.get_data()[1], np.full((2, 8, 8), 2))
+
+
+def test_import_image_sequence_cyx_stacks_per_channel(tmp_path):
+    """Multi-channel selections stack one time series per channel index."""
+    paths = []
+    for stem, value in (("a1", 1), ("a2", 2)):
+        data = np.full((2, 8, 8), value, dtype="uint16")
+        data[1] = value + 100
+        path = tmp_path / f"{stem}.tiff"
+        create_tiff(path, data, VoxelSize(), layout="CYX")
+        paths.append(path)
+    images = import_image(path=paths, semantic_type="segmentation", stack_layout="CYX")
+    assert isinstance(images, list)
+    assert len(images) == 2
+    for image in images:
+        assert image.image_layout == ImageLayout.TYX
+    np.testing.assert_array_equal(images[0].get_data()[1], np.full((8, 8), 2))
+    np.testing.assert_array_equal(images[1].get_data()[1], np.full((8, 8), 102))
+
+
+def test_import_image_sequence_single_file_matches_path_import(tmp_path):
+    path = write_still_tiff(tmp_path / "a1.tiff", (8, 8), 3)
+    from_list = import_image(
+        path=[path], semantic_type="segmentation", stack_layout="YX"
+    )
+    direct = import_image(path=path, semantic_type="segmentation", stack_layout="YX")
+    assert isinstance(from_list, PanSegImage)
+    assert from_list.properties == direct.properties
+    np.testing.assert_array_equal(from_list.get_data(), direct.get_data())
+    assert from_list.properties.source_file_names is None
+
+
+def test_import_image_sequence_sets_source_file_names(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
+        for stem, value in (("a10", 10), ("a2", 2), ("a1", 1))
+    ]
+    image = import_image(path=paths, semantic_type="segmentation", stack_layout="YX")
+    assert image.properties.source_file_names == ["a1", "a2", "a10"]
+    assert image.properties.source_file_name == "a1"
+
+
+def test_image_properties_source_file_names_json_roundtrip():
+    properties = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=VoxelSize(),
+        image_layout=ImageLayout.TYX,
+        original_voxel_size=VoxelSize(),
+        source_file_names=["a1", "a2"],
+    )
+    restored = ImageProperties(**json.loads(properties.model_dump_json()))
+    assert restored.source_file_names == ["a1", "a2"]
+
+
+def test_image_properties_old_json_without_source_file_names():
+    """Blobs written before the field existed load with it None."""
+    properties = ImageProperties(
+        name="image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=VoxelSize(),
+        image_layout=ImageLayout.YX,
+        original_voxel_size=VoxelSize(),
+    )
+    blob = json.loads(properties.model_dump_json())
+    blob.pop("source_file_names", None)
+    assert ImageProperties(**blob).source_file_names is None
+
+
+def test_restack_timepoints_propagates_first_timepoint_source_file_names():
+    series = PanSegImage(
+        np.zeros((3, 8, 8), dtype="uint16"),
+        ImageProperties(
+            name="image",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=VoxelSize(),
+            image_layout=ImageLayout.TYX,
+            original_voxel_size=VoxelSize(),
+            source_file_names=["a1", "a2", "a3"],
+        ),
+    )
+    restacked = restack_timepoints(series.split_timepoints(), t_spacing=None)
+    assert restacked.properties.source_file_names == ["a1", "a2", "a3"]
+
+
+def test_restack_timepoints_explicit_source_file_names_win():
+    series = PanSegImage(
+        np.zeros((2, 8, 8), dtype="uint16"),
+        ImageProperties(
+            name="image",
+            semantic_type=SemanticType.SEGMENTATION,
+            voxel_size=VoxelSize(),
+            image_layout=ImageLayout.TYX,
+            original_voxel_size=VoxelSize(),
+            source_file_names=["a1", "a2"],
+        ),
+    )
+    restacked = restack_timepoints(
+        series.split_timepoints(),
+        t_spacing=None,
+        source_file_names=["b1", "b2"],
+    )
+    assert restacked.properties.source_file_names == ["b1", "b2"]
+
+
+def test_import_image_sequence_slicing_applies_to_every_file(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (4, 8, 8), value)
+        for stem, value in (("a1", 1), ("a2", 2))
+    ]
+    image = import_image(
+        path=paths, semantic_type="segmentation", stack_layout="ZYX[0:2,:,:]"
+    )
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (2, 2, 8, 8)
+    np.testing.assert_array_equal(image.get_data()[0], np.full((2, 8, 8), 1))
+    np.testing.assert_array_equal(image.get_data()[1], np.full((2, 8, 8), 2))
+
+
+def test_import_image_sequence_rejects_t_layout(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / "a1.tiff", (8, 8), 1),
+        write_still_tiff(tmp_path / "a2.tiff", (8, 8), 2),
+    ]
+    with pytest.raises(ValueError, match="layout must be spatial"):
+        import_image(path=paths, semantic_type="segmentation", stack_layout="TYX")
+
+
+def test_import_image_sequence_rejects_channel_count_mismatch(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / "two_c.tiff", (2, 8, 8), 1),
+        write_still_tiff(tmp_path / "three_c.tiff", (3, 8, 8), 1),
+    ]
+    with pytest.raises(ValueError, match="different channel counts") as exc_info:
+        import_image(path=paths, semantic_type="segmentation", stack_layout="CYX")
+    message = str(exc_info.value)
+    assert "two_c (2)" in message
+    assert "three_c (3)" in message
+
+
+def test_import_image_sequence_rejects_voxel_size_mismatch(tmp_path):
+    paths = [
+        write_still_tiff(
+            tmp_path / "a1.tiff", (8, 8), 1, VoxelSize(voxels_size=(1, 1, 1))
+        ),
+        write_still_tiff(
+            tmp_path / "a2.tiff", (8, 8), 2, VoxelSize(voxels_size=(2, 2, 2))
+        ),
+    ]
+    with pytest.raises(ValueError, match="can't be restacked"):
+        import_image(path=paths, semantic_type="segmentation", stack_layout="YX")
+
+
+def test_import_image_sequence_rejects_shape_mismatch(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / "a1.tiff", (8, 8), 1),
+        write_still_tiff(tmp_path / "a2.tiff", (2, 8, 8), 2),
+    ]
+    with pytest.raises(ValueError, match="incompatible with chosen layout"):
+        import_image(path=paths, semantic_type="segmentation", stack_layout="ZYX")
+
+
+def test_import_image_sequence_rejects_native_t_file(tmp_path, make_ome_timeseries):
+    """A file carrying a native T axis is not a single timepoint."""
+    paths = [write_still_tiff(tmp_path / "a1.tiff", (8, 8), 1), make_ome_timeseries()]
+    with pytest.raises(ValueError, match="incompatible with chosen layout"):
+        import_image(path=paths, semantic_type="segmentation", stack_layout="ZYX")
+
+
+def test_import_image_sequence_rejects_empty_list():
+    with pytest.raises(ValueError, match="at least one file"):
+        import_image(path=[], semantic_type="segmentation", stack_layout="YX")
+
+
+def test_import_image_sequence_rejects_nonexistent_file(tmp_path):
+    path = write_still_tiff(tmp_path / "a1.tiff", (8, 8), 1)
+    with pytest.raises(ValueError, match="missing.tif") as exc_info:
+        import_image(
+            path=[path, tmp_path / "missing.tif"],
+            semantic_type="segmentation",
+            stack_layout="YX",
+        )
+
+
+def test_import_image_sequence_rejects_partial_ome_chain(
+    ome_timeseries_multifile, tmp_path
+):
+    """A member whose referenced companion is absent names the missing file."""
+    first, _, _ = ome_timeseries_multifile
+    still = write_still_tiff(tmp_path / "independent.tiff", (8, 8), 1)
+    with pytest.raises(ValueError, match="multifile OME-TIFF") as exc_info:
+        import_image(path=[first, still], semantic_type="raw", stack_layout="YX")
+    assert "missing from the selection" in str(exc_info.value)
+    assert "multifile_second.ome.tif" in str(exc_info.value)
+
+
+def test_import_image_sequence_rejects_complete_ome_chain(ome_timeseries_multifile):
+    first, second, _ = ome_timeseries_multifile
+    with pytest.raises(ValueError, match="one multifile OME-TIFF series") as exc_info:
+        import_image(path=[first, second], semantic_type="raw", stack_layout="ZYX")
+    assert "missing from the selection" not in str(exc_info.value)
+
+
+def test_import_image_sequence_rejects_binary_only_member(ome_binary_only_set):
+    first, second, companion = ome_binary_only_set
+    with pytest.raises(ValueError, match="BinaryOnly"):
+        import_image(
+            path=[first, second, companion],
+            semantic_type="raw",
+            stack_layout="YX",
+        )
+
+
+def test_import_image_sequence_ome_stills_stack(tmp_path):
+    """Independent OME stills are a happy path."""
+    paths = []
+    for index, stem in enumerate(("a1", "a2")):
+        path = tmp_path / f"{stem}.ome.tif"
+        tifffile.imwrite(
+            path,
+            np.full((16, 16), index + 1, dtype="uint16"),
+            ome=True,
+            photometric="minisblack",
+            metadata={"axes": "YX"},
+        )
+        paths.append(path)
+    image = import_image(path=paths, semantic_type="segmentation", stack_layout="YX")
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TYX
+    for timepoint, path in enumerate(paths):
+        np.testing.assert_array_equal(image.get_data()[timepoint], load_tiff(path))

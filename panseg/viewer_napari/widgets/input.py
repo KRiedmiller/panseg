@@ -13,7 +13,7 @@ from panseg import logger
 from panseg.core.image import TIME_UNIT_CHOICES, PanSegImage, SemanticType
 from panseg.io import H5_EXTENSIONS, ZARR_EXTENSIONS
 from panseg.io.h5 import list_h5_keys
-from panseg.io.io import guess_stack_layout
+from panseg.io.io import guess_stack_layout, natural_sort_key
 from panseg.io.pil import PIL_EXTENSIONS
 from panseg.io.tiff import TIFF_EXTENSIONS
 from panseg.io.zarr import list_zarr_keys
@@ -36,6 +36,25 @@ class InputType(Enum):
     @classmethod
     def to_choices(cls):
         return [member.value for member in cls]
+
+
+def _natural_sorted_paths(value) -> tuple[Path, ...]:
+    """Normalize a path-widget value to a natural-sorted tuple of paths.
+
+    The path widget holds one Path in directory (zarr) mode and a tuple of
+    Paths in multi-file mode; both normalize to a tuple here, sorted by
+    alphanumeric file name, so the first entry is timepoint 0 and the file
+    the stack-layout prefill and the default layer name refer to.
+
+    Args:
+        value (Path | tuple[Path, ...]): path-widget value
+
+    Returns:
+        tuple[Path, ...]: the paths, natural-sorted
+    """
+    if isinstance(value, Path):
+        return (value,)
+    return tuple(sorted(value, key=natural_sort_key))
 
 
 class PathMode(Enum):
@@ -127,8 +146,9 @@ class Input_Tab:
         path={
             "value": Path.home(),
             "label": "File path",
-            "mode": "r",
-            "tooltip": "Select a file to be imported, the file can be a tiff, h5, png, jpg.",
+            "mode": "rm",
+            "tooltip": "Select one or more files to import; multiple files "
+            "are imported as one time series, in alphanumeric filename order.",
         },
         new_layer_name={
             "value": "",
@@ -146,7 +166,7 @@ class Input_Tab:
         stack_layout={
             "value": "",
             "label": "Stack layout",
-            "tooltip": "t for time, c for channel, xyz for dimensions, e.g.:\ntzyxc will be reshaped to [T][C][Z]YX.\nInvert an axis by adding `-` infront of the letter.\nTruncate the data before importing with a slice after the letters, e.g. txyz[:3,:,:]:\nthe entries follow the layout as written, before reordering, an integer drops its axis.",
+            "tooltip": "t for time, c for channel, xyz for dimensions, e.g.:\ntzyxc will be reshaped to [T][C][Z]YX.\nInvert an axis by adding `-` infront of the letter.\nTruncate the data before importing with a slice after the letters, e.g. txyz[:3,:,:]:\nthe entries follow the layout as written, before reordering, an integer drops its axis.\nFor multiple files the layout applies to every file and must be spatial (no t).",
             "widget_type": "LineEdit",
         },
     )
@@ -178,13 +198,21 @@ class Input_Tab:
         schedule_task(
             import_image_task,
             task_kwargs={
-                "input_path": path,
+                "input_path": _natural_sorted_paths(path),
                 "key": dataset_key,
                 "image_name": new_layer_name,
                 "semantic_type": semantic_type,
                 "stack_layout": stack_layout,
             },
         )
+
+    def _selected_paths(self) -> tuple[Path, ...]:
+        """The file selection in natural-sorted order.
+
+        Returns:
+            tuple[Path, ...]: the selected paths, natural-sorted
+        """
+        return _natural_sorted_paths(self.widget_open_file.path.value)
 
     def _wrap_key_refresh(self):
         w = self.widget_open_file
@@ -275,7 +303,7 @@ class Input_Tab:
         logger.debug("_on_path_mode_changed called!")
         path_mode = _return_value_if_widget(path_mode)
         if path_mode == PathMode.FILE.value:  # file
-            self.widget_open_file.path.mode = "r"
+            self.widget_open_file.path.mode = "rm"
             self.widget_open_file.path.label = "File path"
         elif path_mode == PathMode.DIR.value:  # directory case
             self.widget_open_file.path.mode = "d"
@@ -284,25 +312,34 @@ class Input_Tab:
     def _on_path_changed(self, path: Path):
         logger.debug("_on_path_changed called!")
         self.path_changed_once = True
-        if path.exists():
-            self.look_up_dataset_keys(path)
+        paths = self._selected_paths()
+        if paths and paths[0].exists():
+            # multi-file selections are checked on the first file only:
+            # the prefill and the key lookup refer to timepoint 0
+            self.look_up_dataset_keys(paths[0])
             self.update_stack_layout()
 
     def _on_refresh_keys_button(self, press: bool):
         logger.debug("_on_refresh_keys_button called!")
-        self.look_up_dataset_keys(self.widget_open_file.path.value)
+        paths = self._selected_paths()
+        if paths:
+            self.look_up_dataset_keys(paths[0])
 
     def _on_dataset_key_changed(self, dataset_key: str):
         logger.debug("_on_dataset_key_changed called!")
         dataset_key = _return_value_if_widget(dataset_key)
-        if dataset_key:
+        paths = self._selected_paths()
+        if dataset_key and paths:
             self.widget_open_file.new_layer_name.value = self.generate_layer_name(
-                self.widget_open_file.path.value, dataset_key
+                paths[0], dataset_key
             )
         self.update_stack_layout()
 
     def update_stack_layout(self):
-        path = self.widget_open_file.path.value
+        paths = self._selected_paths()
+        if not paths:
+            return
+        path = paths[0]
         ext = path.suffix.lower()
 
         if ext in H5_EXTENSIONS:
@@ -321,7 +358,9 @@ class Input_Tab:
 
     def _on_done(self):
         logger.debug("_on_done called!")
-        self.look_up_dataset_keys(self.widget_open_file.path.value)
+        paths = self._selected_paths()
+        if paths:
+            self.look_up_dataset_keys(paths[0])
 
     def _selected_panseg_image(self) -> PanSegImage:
         """Return the PanSegImage of the layer selected in the Details widget."""

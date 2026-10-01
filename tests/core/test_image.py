@@ -1791,23 +1791,7 @@ def test_timeseries_segmentation_fixture(timeseries_segmentation):
 
 
 # --- Time-aware export: a time-bearing image roundtrips through
-# save_image/import_image with layout and t_spacing preserved; _timeseries_ps_image
-# (defined with the split tests above) supplies the images. ---
-
-
-def _timeseries_ps_image(data, layout, t_spacing=None):
-    voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.15), unit="um")
-    return PanSegImage(
-        data=data,
-        properties=ImageProperties(
-            name="timeseries",
-            semantic_type=SemanticType.SEGMENTATION,
-            voxel_size=voxel_size,
-            image_layout=ImageLayout(layout),
-            original_voxel_size=voxel_size,
-            t_spacing=t_spacing,
-        ),
-    )
+# save_image/import_image with layout and t_spacing preserved; ---
 
 
 @pytest.mark.parametrize(

@@ -1289,10 +1289,7 @@ class Proofreading_Tab:
         """Adds or removes a label at a given position to/from the corrected cells.
 
         For timeseries sessions the operation is refused when the displayed
-        timepoint diverges from the session timepoint: silently applying it
-        would mark the cell at (k, z, y), a different cell than the one under
-        the cursor.
-
+        timepoint diverges from the session timepoint.
         Args:
             position (tuple[int, ...]): The position of the cell in the viewer.
         """

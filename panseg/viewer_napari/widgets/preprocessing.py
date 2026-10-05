@@ -381,8 +381,6 @@ class Preprocessing_Tab:
             return None
 
         self.widget_cropping.crop_z.show()
-        # the z range is over z slices, not over timepoints or channels;
-        # z is the first spatial axis of every layout that carries one
         image_shape_z = ps_image.shape[ps_image.image_layout.spatial_axis_indices[0]]
 
         self.widget_cropping.crop_z.step = 1

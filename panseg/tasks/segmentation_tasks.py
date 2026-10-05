@@ -38,9 +38,6 @@ def dt_watershed_task(
     It handles both standard boundary probability maps and nuclei images, with options for
     various preprocessing and segmentation parameters.
 
-    On timeseries input the task runs per timepoint: label IDs are independent
-    per timepoint, with no correspondence across timepoints.
-
     Args:
         image (PanSegImage): The input image to segment.
         threshold (float, optional): Threshold value for the boundary probability maps.
@@ -127,9 +124,6 @@ def clustering_segmentation_task(
 ) -> PanSegImage:
     """Agglomerative segmentation task.
 
-    On timeseries input the task runs per timepoint: label IDs are independent
-    per timepoint, with no correspondence across timepoints.
-
     Args:
         image (PanSegImage): input image object
         over_segmentation (PanSegImage): over-segmentation image object
@@ -205,16 +199,17 @@ def lmc_segmentation_task(
     """Lifted multicut segmentation task.
 
     Args:
-        boundary_pmap (PanSegImage): cell boundary prediction, PanSegImage of shape (Z, Y, X) with values between 0 and 1.
-        superpixels (PanSegImage): superpixels/over-segmentation. Must have the same shape as boundary_pmap.
-        nuclei (PanSegImage): a nuclear segmentation or prediction map. Must have the same shape as boundary_pmap.
+        boundary_pmap (PanSegImage): cell boundary prediction, PanSegImage of
+            shape (Z, Y, X) with values between 0 and 1.
+        superpixels (PanSegImage): superpixels/over-segmentation.
+            Must have the same shape as boundary_pmap.
+        nuclei (PanSegImage): a nuclear segmentation or prediction map.
+            Must have the same shape as boundary_pmap.
         beta (float): beta parameter for the Multicut.
-            A small value will steer the segmentation towards under-segmentation, while
-            a high-value bias the segmentation towards the over-segmentation. (default: 0.5)
+            A small value will steer the segmentation towards under-segmentation,
+            while a high-value bias the segmentation towards the
+            over-segmentation. (default: 0.5)
         post_min_size (int): minimal size of the segments after Multicut. (default: 100)
-
-    On timeseries input the task runs per timepoint: label IDs are independent
-    per timepoint, with no correspondence across timepoints.
     """
     if (
         nuclei.semantic_type is SemanticType.PREDICTION
@@ -300,9 +295,6 @@ def aio_watershed_task(
         beta (float, optional): Beta parameter for the agglomeration. Small values steer
             towards under-segmentation, while high values bias towards
             over-segmentation. Defaults to 0.6.
-
-    On timeseries input the task runs per timepoint: label IDs are independent
-    per timepoint, with no correspondence across timepoints.
 
     Returns:
         PanSegImage: The segmented image as a new `PanSegImage` object.

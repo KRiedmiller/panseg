@@ -617,8 +617,7 @@ def timepoint_map(
     """
     Decorator that runs a task frame-by-frame over timeseries input.
 
-    Stack it directly under @task_tracker; the task body stays unchanged
-    and never sees T. At call time the decorator inspects the keyword
+    Use under @task_tracker. At call time the decorator inspects the keyword
     arguments: every PanSegImage input with is_timeseries is split into
     timepoints, the task body runs once per timepoint, and the outputs are
     restacked into a timeseries. A call without a timeseries input passes
@@ -714,7 +713,7 @@ def timepoint_map(
             # A timepoint loses t_spacing in the split; stamp the shared
             # spacing back on through the validated core API so task
             # bodies preserve it through derive_new and property tasks
-            # can override it (fallback rule: timepoint_map docstring).
+            # can override it.
             timepoints_per_input = {
                 name: image.split_timepoints()
                 for name, image in timeseries_inputs.items()

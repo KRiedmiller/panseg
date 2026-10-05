@@ -296,10 +296,6 @@ class PanSegImage:
         Returns:
             PanSegImage: New image
         """
-
-        # Dump every key, including None-valued ones: a derived image may
-        # explicitly set a property to None (e.g. t_spacing on a timepoint),
-        # and dropping the key here would reject the kwarg below.
         property_dict = self._properties.model_dump()
 
         if name == self.name:

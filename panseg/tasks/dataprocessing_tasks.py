@@ -132,12 +132,9 @@ def set_voxel_size_task(
 ) -> PanSegImage:
     """Set the voxel size of an image.
 
-    Property-only: the data is unchanged.
-
     Args:
         image (PanSegImage): input image
         voxel_size (tuple[float, float, float]): new voxel size
-
     """
     new_voxel_size = VoxelSize(voxels_size=voxel_size)
     new_image = image.derive_new(
@@ -155,9 +152,6 @@ def set_t_spacing_task(
     image: PanSegImage, t_spacing: float | None, t_unit: str = "s"
 ) -> PanSegImage:
     """Set the time spacing of a timeseries image.
-
-    Property-only: the data is unchanged. Mirrors set_voxel_size_task, but
-    for the time axis.
 
     Note: on a timeseries input with a known spacing, t_spacing=None does
     not clear the restacked output's spacing - the restacked output takes
@@ -339,9 +333,6 @@ def fix_over_under_segmentation_from_nuclei_task(
     """
     Task to fix over- and under-segmentation of cells based on nuclear segmentation.
 
-    On timeseries input the task runs per timepoint: label IDs are independent
-    per timepoint, with no correspondence across timepoints.
-
     Args:
         cell_seg (PanSegImage): Input cell segmentation as a PanSegImage object.
         nuclei_seg (PanSegImage): Input nuclear segmentation as a PanSegImage object.
@@ -374,10 +365,6 @@ def set_biggest_instance_to_zero_task(
     """
     Task to set the largest segment in a segmentation image to zero.
 
-    On timeseries input the task runs per timepoint: the largest instance is
-    zeroed within each timepoint, and label IDs are independent across
-    timepoints.
-
     Args:
         image (PanSegImage): Segmentation image to process.
         instance_could_be_zero (bool): If True, 0 might be an instance label,
@@ -408,10 +395,6 @@ def relabel_segmentation_task(
     Task to relabel a segmentation image contiguously, ensuring non-touching
     segments with the same ID are relabeled.
 
-    On timeseries input the task runs per timepoint: connected components are
-    renumbered per timepoint (spatial connectivity only), and label IDs are
-    independent across timepoints.
-
     Args:
         image (PanSegImage): Segmentation image to process.
 
@@ -438,6 +421,8 @@ def image_pair_operation_task(
 ) -> PanSegImage:
     """
     Task to perform an operation on two images.
+
+    Supports timepoint broadcasting for mixing time series and still images.
 
     Args:
         image1 (PanSegImage): First image to process.

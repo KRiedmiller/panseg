@@ -374,13 +374,10 @@ class Input_Tab:
             try:
                 t_spacing_value = float(value)
             except ValueError:
-                logger.warning(f"Invalid time spacing {value!r}, nothing scheduled.")
+                logger.warning(f"Invalid time spacing {value!r}.")
                 return
             if t_spacing_value <= 0:
-                logger.warning(
-                    f"Time spacing must be positive, got {t_spacing_value}, "
-                    "nothing scheduled."
-                )
+                logger.warning(f"Time spacing must be positive, got {t_spacing_value}.")
                 return
 
         return schedule_task(
@@ -393,12 +390,7 @@ class Input_Tab:
         )
 
     def _wrap_t_spacing(self):
-        """Group the time spacing value and its unit in one horizontal row.
-
-        magicgui's QuantityEdit is not a fit: its unit choices are fixed to
-        pint's defaults (which the data model would reject) and it cannot
-        represent an empty, i.e. unknown, spacing.
-        """
+        """Group the time spacing value and its unit in one horizontal row."""
         w = self.widget_set_t_spacing
 
         t_spacing_d = {
@@ -490,7 +482,7 @@ class Input_Tab:
         if ps_image.is_timeseries:
             t_spacing = ps_image.properties.t_spacing
             t_spacing_formatted = (
-                f"{t_spacing:.2f} {ps_image.properties.t_unit}"
+                f"{t_spacing:.3g} {ps_image.properties.t_unit}"
                 if t_spacing is not None
                 else "None"
             )

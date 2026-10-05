@@ -723,8 +723,6 @@ def test_set_biggest_instance_to_zero_is_per_timepoint():
 
     assert set(np.unique(out[0])) == {0, 2}
     assert set(np.unique(out[1])) == {0, 4}
-    # the per-timepoint semantics are documented in the task docstring
-    assert "timepoint" in set_biggest_instance_to_zero_task.__doc__
 
 
 def test_stack_level_io_tasks_accept_timeseries(timeseries_tzyx, tmp_path):

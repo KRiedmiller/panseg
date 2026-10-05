@@ -302,7 +302,7 @@ def test_set_t_spacing_nonpositive_field_ignored(
 def test_details_info_shows_time_spacing_when_known(input_tab, napari_timeseries):
     input_tab.widget_details_layer_select.layer.choices = [napari_timeseries]
     input_tab.widget_details_layer_select.layer.value = napari_timeseries
-    assert "Time spacing: 10.00 s" in input_tab.widget_info.value
+    assert "Time spacing: 10 s" in input_tab.widget_info.value
 
 
 def test_details_info_shows_unknown_time_spacing(

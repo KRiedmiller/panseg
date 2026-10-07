@@ -35,6 +35,23 @@ Files and subdirectories in the same directory: the files win and the
 subdirectories are ignored. A subdirectory without importable files stops
 the run with an error.
 
+## Stack layout
+
+The workflow's `stack_layout` is one value for all jobs, and it describes
+the image a job consumes. A time series workflow records a layout with a
+`t` (TYX, TZYX, ...); a workflow recorded from multiple files records the
+same layout as one recorded from a single file with a time dimension, and
+both behave identically.
+
+A job that consumes one file (a single file, or one file of a directory)
+must match the layout exactly: a `t` in the layout requires the file to
+carry the time axis, so a directory of time series files runs one series
+per file, and a directory of still files errors. A job that stacks files
+(a list, or a directory of subdirectories) has the `t` stripped - stacking
+supplies the time axis - and the spatial axes apply to every file. A slice
+entry on the `t` is rejected for a selection: the time axis exists only
+after the files are stacked.
+
 ## Widget: Export Batch Workflow
 
 ```python exec="1" html="1"

@@ -118,9 +118,10 @@ def test_stack_layout_tooltip_mentions_slice(input_tab):
     assert "Truncate the data before importing" in tooltip
 
 
-def test_stack_layout_tooltip_mentions_spatial_for_multiple_files(input_tab):
+def test_stack_layout_tooltip_mentions_stacked_series_for_multiple_files(input_tab):
     tooltip = input_tab.widget_open_file.stack_layout.tooltip
-    assert "must be spatial" in tooltip
+    assert "stacked time series" in tooltip
+    assert "spatial axes apply to every file" in tooltip
 
 
 def test_open_file_passes_stack_layout_with_slice(input_tab, mocker, tmp_path):
@@ -413,6 +414,19 @@ def test_path_change_multi_selection_prefills_from_first_sorted(input_tab, tmp_p
     create_tiff(plain, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
     anchor = OME_EXAMPLES / "4D-series.ome.tif"
     input_tab.widget_open_file.path.value = (plain, anchor)
+    assert input_tab.widget_open_file.stack_layout.value == "TZYX"
+
+
+def test_path_change_multi_selection_prefills_stacked_layout(input_tab, tmp_path):
+    """A multi-file selection imports as one time series: the prefilled
+    layout describes the stacked series, so the time axis of the first
+    file's spatial guess is prepended. The exported workflow then records
+    the T-bearing layout and re-runs on any documented input shape."""
+    z1 = tmp_path / "a1.tiff"
+    z2 = tmp_path / "a2.tiff"
+    for path in (z1, z2):
+        create_tiff(path, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    input_tab.widget_open_file.path.value = (z1, z2)
     assert input_tab.widget_open_file.stack_layout.value == "TZYX"
 
 

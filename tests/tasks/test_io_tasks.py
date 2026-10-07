@@ -628,14 +628,33 @@ def test_import_image_task_list_default_name_first_sorted_stem(tmp_path):
     assert image.name == "a1"
 
 
-def test_import_image_task_list_t_layout_returns_task_message(tmp_path):
-    """The GUI wrapper converts the D1 error into a Task_message."""
+def test_import_image_task_list_t_layout_stacks(tmp_path):
+    """A T-bearing layout describes the stacked series: a list input strips
+    it and stacks, exactly like the plain spatial layout. This is what lets
+    an exported workflow - one stack_layout for all jobs - take its input
+    as a single T-bearing file or as a selection of files."""
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
+        for stem, value in (("a1", 1), ("a2", 2))
+    ]
+    image = import_image_task(
+        input_path=paths, semantic_type="segmentation", stack_layout="TYX"
+    )
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TYX
+    assert image.shape[0] == 2
+    assert image.properties.source_file_names == ["a1", "a2"]
+
+
+def test_import_image_task_list_t_slice_returns_task_message(tmp_path):
+    """The GUI wrapper converts the time-slice rejection into a
+    Task_message: the time axis of a selection comes from stacking."""
     paths = [
         write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
         for stem, value in (("a1", 1), ("a2", 2))
     ]
     result = import_image_task(
-        input_path=paths, semantic_type="segmentation", stack_layout="TYX"
+        input_path=paths, semantic_type="segmentation", stack_layout="TYX[:1,:,:]"
     )
     assert isinstance(result, Task_message)
-    assert "layout must be spatial" in result.message
+    assert "slices the time axis" in result.message

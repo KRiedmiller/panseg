@@ -166,7 +166,7 @@ class Input_Tab:
         stack_layout={
             "value": "",
             "label": "Stack layout",
-            "tooltip": "t for time, c for channel, xyz for dimensions, e.g.:\ntzyxc will be reshaped to [T][C][Z]YX.\nInvert an axis by adding `-` infront of the letter.\nTruncate the data before importing with a slice after the letters, e.g. txyz[:3,:,:]:\nthe entries follow the layout as written, before reordering, an integer drops its axis.\nFor multiple files the layout applies to every file and must be spatial (no t).",
+            "tooltip": "t for time, c for channel, xyz for dimensions, e.g.:\ntzyxc will be reshaped to [T][C][Z]YX.\nInvert an axis by adding `-` infront of the letter.\nTruncate the data before importing with a slice after the letters, e.g. txyz[:3,:,:]:\nthe entries follow the layout as written, before reordering, an integer drops its axis.\nFor multiple files the layout describes the stacked time series:\nstacking adds the time axis, and the spatial axes apply to every file.",
             "widget_type": "LineEdit",
         },
     )
@@ -341,20 +341,30 @@ class Input_Tab:
             return
         path = paths[0]
         ext = path.suffix.lower()
+        guess = ""
 
         if ext in H5_EXTENSIONS:
             key = self.dataset_key.value
-            self.widget_open_file.stack_layout.value = guess_stack_layout(path, key)
+            guess = guess_stack_layout(path, key)
 
         elif ext in ZARR_EXTENSIONS:
             key = self.dataset_key.value
-            self.widget_open_file.stack_layout.value = guess_stack_layout(path, key)
+            guess = guess_stack_layout(path, key)
 
         elif ext in TIFF_EXTENSIONS:
-            self.widget_open_file.stack_layout.value = guess_stack_layout(path)
+            guess = guess_stack_layout(path)
 
         elif ext in PIL_EXTENSIONS:
-            self.widget_open_file.stack_layout.value = guess_stack_layout(path)
+            guess = guess_stack_layout(path)
+
+        if len(paths) > 1 and guess and "T" not in guess.upper():
+            # a multi-file selection imports as one time series: the layout
+            # describes the stacked series, so it carries the time axis the
+            # stacking adds, and the import applies the spatial axes to
+            # every file. This is also what the exported workflow records,
+            # so it re-runs on any documented input shape.
+            guess = f"T{guess}"
+        self.widget_open_file.stack_layout.value = guess
 
     def _on_done(self):
         logger.debug("_on_done called!")

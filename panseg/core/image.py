@@ -1006,6 +1006,19 @@ def _parse_slicing(slicing: str) -> list[slice | int]:
     return entries
 
 
+def _slicing_entry_to_str(entry: slice | int) -> str:
+    """Render a _parse_slicing entry back to its slicing-string fragment."""
+    if isinstance(entry, int):
+        return str(entry)
+    fields = (
+        "" if start is None else str(start) for start in (entry.start, entry.stop)
+    )
+    text = ":".join(fields)
+    if entry.step is not None:
+        text = f"{text}:{entry.step}"
+    return text
+
+
 def crop_to_stack_layout(
     data: np.ndarray, stack_layout: str, slicing: str
 ) -> tuple[str, np.ndarray]:
@@ -1039,6 +1052,76 @@ def crop_to_stack_layout(
     return stack_layout, data
 
 
+def _strip_stacked_time_axis(stack_layout: str) -> str:
+    """Drop the time axis from a stack layout for a multi-file import.
+
+    The reconciliation is keyed on the job shape: a selection of files is
+    one stacked series, so the layout's `t` describes the series the job
+    produces and stacking supplies that axis - the spatial remainder is
+    what applies to every file. This is what lets one exported workflow -
+    whose stack_layout is one value for all jobs - take its input as a
+    single T-bearing file (the layout matches the file exactly) or as a
+    selection of files (the t is stripped and stacking adds the axis). A
+    single-file job, by contrast, imports through the exact-match path: a
+    still file into a time series workflow errors instead of losing its t.
+
+    A slice entry on the time axis has no per-file meaning: a bare ":" is
+    dropped (no truncation intent, the remaining entries realign to the
+    spatial axes), any other entry is rejected - the time axis of a
+    selection exists only after the files are stacked.
+
+    Args:
+        stack_layout (str): layout spec, letters with an optional slice
+
+    Returns:
+        str: the spatial layout spec to apply to every file
+
+    Raises:
+        ValueError: if the layout slices the time axis with more than a
+            bare ":", carries the time axis twice, or has no spatial axes
+            left without it
+    """
+    letters, slicing = split_stack_layout(stack_layout)
+    tokens = _layout_tokens(letters)
+    t_positions = [i for i, (char, _) in enumerate(tokens) if char.upper() == "T"]
+    if not t_positions:
+        return stack_layout
+    if len(t_positions) > 1:
+        raise ValueError(
+            f"Stack layout {stack_layout!r} carries the time axis more than once."
+        )
+    t_position = t_positions[0]
+    if slicing is not None:
+        entries = _parse_slicing(slicing)
+        if len(entries) > t_position:
+            t_entry = entries[t_position]
+            if t_entry != slice(None):
+                raise ValueError(
+                    f"Stack layout {stack_layout!r} slices the time axis, but a "
+                    "multi-file import gets the time axis from stacking: the "
+                    "spatial entries apply to every file, and the stacked "
+                    "series cannot be truncated through the layout."
+                )
+            # a bare ":" carries no truncation intent: drop it so the
+            # remaining entries realign to the spatial axes
+            entries.pop(t_position)
+            slicing = ",".join(_slicing_entry_to_str(entry) for entry in entries)
+    spatial = "".join(
+        f"{'-' if inverted else ''}{char}"
+        for i, (char, inverted) in enumerate(tokens)
+        if i != t_position
+    )
+    if not spatial:
+        raise ValueError(
+            f"Stack layout {stack_layout!r} has no spatial axes left without "
+            "the time axis: a multi-file import stacks the files along time "
+            "and every file needs at least one spatial axis."
+        )
+    if slicing is not None:
+        spatial = f"{spatial}[{slicing}]"
+    return spatial
+
+
 def _import_image_sequence(
     paths: Sequence[Path],
     key: str | None,
@@ -1050,11 +1133,12 @@ def _import_image_sequence(
 
     Every file is one timepoint: the files are ordered by alphanumeric
     (natural) file name, each is imported through the single-file path with
-    the same key, semantic type and (spatial) stack layout, and the results
-    are restacked per channel index with restack_timepoints. The result is
-    one PanSegImage for single-channel selections, a list of one PanSegImage
-    per channel otherwise - the same shape the channel-split single-file
-    path returns.
+    the same key, semantic type and stack layout, and the results are
+    restacked per channel index with restack_timepoints. A t in the layout
+    describes the stacked series; the spatial axes without t are applied to
+    every file (_strip_stacked_time_axis). The result is one PanSegImage
+    for single-channel selections, a list of one PanSegImage per channel
+    otherwise - the same shape the channel-split single-file path returns.
 
     Args:
         paths (Sequence[Path]): the selected file paths; str entries are
@@ -1097,12 +1181,9 @@ def _import_image_sequence(
     # BinaryOnly placeholders) instead of independent images
     check_ome_multifile_selection(paths)
 
-    layout_letters, _ = split_stack_layout(stack_layout.upper())
-    if "T" in layout_letters:
-        raise ValueError(
-            f"Stacking multiple files adds the time axis; the layout must be "
-            f"spatial (got {stack_layout})"
-        )
+    # the layout may carry T: it describes the stacked series, so the
+    # spatial remainder is what applies to every file
+    per_file_stack_layout = _strip_stacked_time_axis(stack_layout)
 
     per_file = [
         import_image(
@@ -1110,7 +1191,7 @@ def _import_image_sequence(
             key=key,
             image_name=entry.stem,
             semantic_type=semantic_type,
-            stack_layout=stack_layout,
+            stack_layout=per_file_stack_layout,
         )
         for entry in paths
     ]
@@ -1165,9 +1246,13 @@ def import_image(
 
     A sequence of paths (multi-file import) is stacked as one time series:
     each file is one timepoint, the files are ordered by alphanumeric
-    (natural) file name, and the stack layout applies spatially to every
-    file (a t letter is rejected - stacking adds T). The stems of the
-    source files are recorded in ImageProperties.source_file_names.
+    (natural) file name, and the stack layout applies to every file. The
+    layout may carry a t, and the reconciliation is keyed on the job shape:
+    a selection is one stacked series, so its t is stripped and stacking
+    adds the time axis; a single file imports through the exact-match path,
+    where the layout must match the file's own axes - a still file into a
+    time series workflow errors. The stems of the source files are recorded
+    in ImageProperties.source_file_names.
 
     Args:
         path (Path | Sequence[Path]): path to the image file, or a

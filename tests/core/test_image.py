@@ -2028,13 +2028,136 @@ def test_import_image_sequence_slicing_applies_to_every_file(tmp_path):
     np.testing.assert_array_equal(image.get_data()[1], np.full((2, 8, 8), 2))
 
 
-def test_import_image_sequence_rejects_t_layout(tmp_path):
+def test_import_image_sequence_t_layout_matches_spatial(tmp_path):
+    """A T in the layout describes the stacked series: the spatial axes
+    without it apply to every file, so the result is the same series the
+    plain spatial layout produces."""
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
+        for stem, value in (("a1", 1), ("a2", 2))
+    ]
+    with_t = import_image(path=paths, semantic_type="segmentation", stack_layout="TYX")
+    without_t = import_image(
+        path=paths, semantic_type="segmentation", stack_layout="YX"
+    )
+    assert with_t.image_layout == ImageLayout.TYX
+    assert with_t.shape == without_t.shape
+    np.testing.assert_array_equal(with_t.get_data(), without_t.get_data())
+    assert with_t.properties.source_file_names == ["a1", "a2"]
+
+
+def test_import_image_sequence_tzyx_layout_stacks_3d(tmp_path):
+    """A T-bearing 3D layout (e.g. exported from a TZYX recording) maps a
+    selection of ZYX stills onto the same TZYX series."""
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (4, 8, 8), value)
+        for stem, value in (("a1", 1), ("a2", 2))
+    ]
+    image = import_image(path=paths, semantic_type="segmentation", stack_layout="TZYX")
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (2, 4, 8, 8)
+    np.testing.assert_array_equal(image.get_data()[1], np.full((4, 8, 8), 2))
+
+
+def test_import_image_sequence_tcx_layout_stacks_channels(tmp_path):
+    """A multi-channel selection with a T-bearing layout stacks one series
+    per channel, exactly like the plain channel layout."""
+    paths = []
+    for stem, value in (("a1", 1), ("a2", 2)):
+        data = np.full((2, 8, 8), value, dtype="uint16")
+        path = tmp_path / f"{stem}.tiff"
+        create_tiff(path, data, VoxelSize(), layout="CYX")
+        paths.append(path)
+    images = import_image(path=paths, semantic_type="segmentation", stack_layout="TCYX")
+    assert isinstance(images, list)
+    assert len(images) == 2
+    assert all(image.image_layout == ImageLayout.TYX for image in images)
+    np.testing.assert_array_equal(images[1].get_data()[0], np.full((8, 8), 1))
+
+
+def test_import_image_sequence_rejects_t_slice(tmp_path):
+    """A slice entry on the time axis has no per-file meaning for a
+    selection: the time axis exists only after stacking, so the spec is
+    rejected instead of silently dropping the truncation."""
     paths = [
         write_still_tiff(tmp_path / "a1.tiff", (8, 8), 1),
         write_still_tiff(tmp_path / "a2.tiff", (8, 8), 2),
     ]
-    with pytest.raises(ValueError, match="layout must be spatial"):
-        import_image(path=paths, semantic_type="segmentation", stack_layout="TYX")
+    with pytest.raises(ValueError, match="slices the time axis"):
+        import_image(
+            path=paths, semantic_type="segmentation", stack_layout="TYX[:1,:,:]"
+        )
+
+
+def test_import_image_sequence_spatial_slice_with_t_layout(tmp_path):
+    """Slice entries before the T stay with their spatial axis; the slice
+    applies to every file as before."""
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (4, 8, 8), value)
+        for stem, value in (("a1", 1), ("a2", 2))
+    ]
+    image = import_image(
+        path=paths, semantic_type="segmentation", stack_layout="TZYX[:, 0:2,:,:]"
+    )
+    assert image.image_layout == ImageLayout.TZYX
+    assert image.shape == (2, 2, 8, 8)
+    np.testing.assert_array_equal(image.get_data()[0], np.full((2, 8, 8), 1))
+
+
+def test_import_image_sequence_rejects_time_only_layout(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / "a1.tiff", (8, 8), 1),
+        write_still_tiff(tmp_path / "a2.tiff", (8, 8), 2),
+    ]
+    with pytest.raises(ValueError, match="no spatial axes left"):
+        import_image(path=paths, semantic_type="segmentation", stack_layout="T")
+
+
+def test_import_image_rejects_still_file_into_t_layout(tmp_path):
+    """A single-file job must match the layout exactly: a still file into a
+    time series workflow errors - the t is never dropped or inferred."""
+    path = write_still_tiff(tmp_path / "still.tiff", (8, 8), 7)
+    with pytest.raises(ValueError, match="incompatible with chosen layout"):
+        import_image(path=path, semantic_type="segmentation", stack_layout="TYX")
+
+
+def test_import_image_t_layout_exact_match_still_timeseries(tmp_path):
+    """A T-bearing layout over a file that matches it exactly keeps the
+    existing behavior: the file's own axis is the time axis."""
+    path = tmp_path / "series.tiff"
+    create_tiff(
+        path,
+        np.arange(2 * 8 * 8, dtype="float32").reshape(2, 8, 8),
+        VoxelSize(),
+        layout="TYX",
+    )
+    image = import_image(
+        path=path.with_suffix(".ome.tiff"),
+        semantic_type="segmentation",
+        stack_layout="TYX",
+    )
+    assert image.image_layout == ImageLayout.TYX
+    assert image.shape == (2, 8, 8)
+    np.testing.assert_array_equal(image.get_data()[1], np.arange(64, 128).reshape(8, 8))
+
+
+def test_import_image_rejects_still_file_two_axes_short(tmp_path):
+    """A single file must match the layout exactly - the layout is the
+    workflow's assertion of the axes a job consumes, and nothing is dropped
+    or inferred to make a mismatching file fit."""
+    path = write_still_tiff(tmp_path / "still.tiff", (8, 8), 7)
+    with pytest.raises(ValueError, match="incompatible with chosen layout"):
+        import_image(path=path, semantic_type="segmentation", stack_layout="TZYX")
+
+
+def test_import_image_rejects_t_slice_over_still_file(tmp_path):
+    """A still file into a time series workflow errors on the shape
+    mismatch, whether or not the layout also slices the time axis."""
+    path = write_still_tiff(tmp_path / "still.tiff", (8, 8), 7)
+    with pytest.raises(ValueError, match="incompatible with chosen layout"):
+        import_image(
+            path=path, semantic_type="segmentation", stack_layout="TYX[:1,:,:]"
+        )
 
 
 def test_import_image_sequence_rejects_channel_count_mismatch(tmp_path):

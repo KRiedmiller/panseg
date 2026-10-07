@@ -13,10 +13,13 @@ series: each file is one timepoint, and the time axis appears without you
 writing a `t` anywhere. The files are stacked in alphanumeric filename
 order, so `a2.tif` comes before `a10.tif`.
 
-Every file in the selection must be a single image. The stack layout
-applies to all of them, so it has to be spatial: a `t` in the layout is
-rejected because stacking itself adds the time axis. Multi-channel files
-stack per channel, and the channel counts must match across files.
+Every file in the selection must be a single image. The stack layout field
+is prefilled with the `t` of the stacked series (e.g. `TYX` for 2D files),
+and its spatial axes apply to every file: the time axis comes from the
+stacking itself, so the import strips it before loading each file. A slice
+entry on the `t` is rejected for a selection - slice the spatial axes, and
+truncate the imported series afterwards. Multi-channel files stack per
+channel, and the channel counts must match across files.
 
 The time spacing between independently stored files is not written anywhere
 on disk, so it imports as unknown. Set it afterwards in the Details field of

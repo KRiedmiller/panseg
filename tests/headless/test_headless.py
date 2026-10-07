@@ -459,3 +459,234 @@ def test_headless_gui_saved_multifile_workflow_reruns(tmp_path):
     assert len(results) == 1, results
     with tifffile.TiffFile(results[0]) as tiff:
         assert tiff.series[0].shape[0] == 2
+
+
+def _timeseries_workflow(tmp_path: Path) -> dict:
+    """A workflow recorded from a multi-file (time series) import, with the
+    stacked (T-bearing) stack_layout the GUI now prefills and records, a
+    frame-mapped processing step, and the export."""
+    first = write_still_tiff(tmp_path / "a1.tiff", (16, 16), 1)
+    second = write_still_tiff(tmp_path / "a2.tiff", (16, 16), 2)
+
+    workflow_handler.clean_dag()
+    ps_1 = import_image_task(
+        input_path=(first, second),
+        key="raw",
+        semantic_type="segmentation",
+        stack_layout="TYX",
+    )
+    assert isinstance(ps_1, PanSegImage)
+    ps_2 = gaussian_smoothing_task(image=ps_1, sigma=1.0)
+    assert isinstance(ps_2, PanSegImage)
+    export_image_task(
+        image=ps_2,
+        export_directory=tmp_path / "output",
+        name_pattern="{file_name}_export",
+        scale_to_origin=True,
+    )
+    workflow_handler.save_to_yaml(tmp_path / "workflow.yaml")
+
+    with open(tmp_path / "workflow.yaml", "r") as file:
+        config = yaml.safe_load(file)
+
+    import_entry = next(
+        task for task in config["list_tasks"] if task["func"] == "import_image_task"
+    )
+    # the exported workflow pins the timeseries layout it was recorded from
+    assert import_entry["parameters"]["stack_layout"] == "TYX"
+    return config
+
+
+def _run_timeseries_workflow(tmp_path: Path, config: dict, input_path, output_name):
+    output_dir = tmp_path / output_name
+    config["inputs"] = [
+        {
+            "input_path": input_path,
+            "export_directory": str(output_dir),
+            "name_pattern": "{file_name}_export",
+        }
+    ]
+    workflow_path = tmp_path / f"{output_name}.yaml"
+    with open(workflow_path, "w") as file:
+        yaml.dump(config, file)
+    run_headless_workflow(workflow_path)
+    return output_dir
+
+
+def test_headless_timeseries_workflow_runs_on_timeseries_file(tmp_path):
+    """The exported workflow takes a single T-bearing file: the recorded
+    layout matches the file exactly."""
+    config = _timeseries_workflow(tmp_path)
+
+    series = tmp_path / "series.tiff"
+    create_tiff(
+        series,
+        np.arange(2 * 16 * 16, dtype="float32").reshape(2, 16, 16),
+        VoxelSize(),
+        layout="TYX",
+    )
+
+    output_dir = _run_timeseries_workflow(
+        tmp_path, config, str(series.with_suffix(".ome.tiff")), "out_ts_file"
+    )
+    results = list(output_dir.glob("*_export.ome.tiff"))
+    assert len(results) == 1, results
+    with tifffile.TiffFile(results[0]) as tiff:
+        assert tiff.series[0].axes == "TYX"
+        assert tiff.series[0].shape[0] == 2
+
+
+def test_headless_timeseries_workflow_runs_on_list_input(tmp_path):
+    """The exported workflow takes a list of stills: the recorded T is
+    stripped and stacking supplies the time axis."""
+    config = _timeseries_workflow(tmp_path)
+
+    b1 = write_still_tiff(tmp_path / "b1.tiff", (16, 16), 10)
+    b2 = write_still_tiff(tmp_path / "b2.tiff", (16, 16), 20)
+
+    output_dir = _run_timeseries_workflow(
+        tmp_path, config, [str(b1), str(b2)], "out_list"
+    )
+    results = list(output_dir.glob("*_export.ome.tiff"))
+    assert len(results) == 1, results
+    with tifffile.TiffFile(results[0]) as tiff:
+        assert tiff.series[0].axes == "TYX"
+        assert tiff.series[0].shape[0] == 2
+
+
+def test_headless_timeseries_workflow_runs_on_dir_of_dirs(tmp_path):
+    """The exported workflow takes a directory of subdirectories: one
+    stacked time series per subdirectory."""
+    config = _timeseries_workflow(tmp_path)
+
+    input_directory = tmp_path / "inputs"
+    (input_directory / "series_a").mkdir(parents=True)
+    (input_directory / "series_b").mkdir(parents=True)
+    write_still_tiff(input_directory / "series_a" / "a1.tiff", (16, 16), 1)
+    write_still_tiff(input_directory / "series_a" / "a2.tiff", (16, 16), 2)
+    write_still_tiff(input_directory / "series_b" / "b1.tiff", (16, 16), 10)
+    write_still_tiff(input_directory / "series_b" / "b2.tiff", (16, 16), 20)
+
+    output_dir = _run_timeseries_workflow(
+        tmp_path, config, str(input_directory), "out_dod"
+    )
+    results = sorted(output_dir.glob("*_export.ome.tiff"))
+    assert len(results) == 2, results
+    for path in results:
+        with tifffile.TiffFile(path) as tiff:
+            assert tiff.series[0].axes == "TYX"
+            assert tiff.series[0].shape[0] == 2
+
+
+def test_headless_timeseries_workflow_errors_on_dir_of_stills(tmp_path):
+    """A time series workflow over a directory of still files errors: the
+    directory-of-files shape runs one job per file, and a single-file job
+    must match the recorded layout exactly - a still file is not a series."""
+    config = _timeseries_workflow(tmp_path)
+
+    file_dir = tmp_path / "plain"
+    file_dir.mkdir()
+    write_still_tiff(file_dir / "p1.tiff", (16, 16), 5)
+    write_still_tiff(file_dir / "p2.tiff", (16, 16), 6)
+
+    output_dir = tmp_path / "out_files"
+    config["inputs"] = [
+        {
+            "input_path": str(file_dir),
+            "export_directory": str(output_dir),
+            "name_pattern": "{file_name}_export",
+        }
+    ]
+    workflow_path = tmp_path / "out_files.yaml"
+    with open(workflow_path, "w") as file:
+        yaml.dump(config, file)
+
+    with pytest.raises(ValueError, match="incompatible with chosen layout"):
+        run_headless_workflow(workflow_path)
+
+
+def test_timeseries_recording_equivalent_to_single_file_recording(tmp_path):
+    """A workflow recorded from multiple files is identical to one recorded
+    from a single time series file: both record the stacked (T-bearing)
+    stack_layout, and the DAGs differ only in the recorded input_path."""
+    first = write_still_tiff(tmp_path / "a1.tiff", (16, 16), 1)
+    second = write_still_tiff(tmp_path / "a2.tiff", (16, 16), 2)
+    series = tmp_path / "series.tiff"
+    create_tiff(
+        series,
+        np.arange(2 * 16 * 16, dtype="float32").reshape(2, 16, 16),
+        VoxelSize(),
+        layout="TYX",
+    )
+
+    dags = {}
+    for label, input_path in (
+        ("multifile", (first, second)),
+        ("single-file", series.with_suffix(".ome.tiff")),
+    ):
+        workflow_handler.clean_dag()
+        ps_1 = import_image_task(
+            input_path=input_path,
+            key="raw",
+            semantic_type="segmentation",
+            stack_layout="TYX",
+        )
+        assert isinstance(ps_1, PanSegImage)
+        export_image_task(
+            image=ps_1,
+            export_directory=tmp_path / f"output_{label}",
+            name_pattern="{file_name}_export",
+            scale_to_origin=True,
+        )
+        workflow_handler.save_to_yaml(tmp_path / f"workflow_{label}.yaml")
+        with open(tmp_path / f"workflow_{label}.yaml", "r") as file:
+            dags[label] = yaml.safe_load(file)
+
+    tasks = {
+        label: [(task["func"], task["parameters"]) for task in dag["list_tasks"]]
+        for label, dag in dags.items()
+    }
+    assert tasks["multifile"] == tasks["single-file"]
+
+
+def test_headless_timeseries_workflow_runs_on_dir_of_timeseries_files(tmp_path):
+    """A time series workflow over a directory of T-bearing files runs one
+    series per file: each single-file job matches the recorded layout
+    exactly, exactly like a workflow recorded from one T-bearing file."""
+    config = _timeseries_workflow(tmp_path)
+
+    ts_dir = tmp_path / "series_files"
+    ts_dir.mkdir()
+    for stem, n_t in (("t1", 2), ("t2", 3)):
+        create_tiff(
+            ts_dir / f"{stem}.tiff",
+            np.arange(n_t * 16 * 16, dtype="float32").reshape(n_t, 16, 16),
+            VoxelSize(),
+            layout="TYX",
+        )
+
+    output_dir = tmp_path / "out_ts_files"
+    config["inputs"] = [
+        {
+            "input_path": str(ts_dir),
+            "export_directory": str(output_dir),
+            "name_pattern": "{file_name}_export",
+        }
+    ]
+    workflow_path = tmp_path / "out_ts_files.yaml"
+    with open(workflow_path, "w") as file:
+        yaml.dump(config, file)
+
+    run_headless_workflow(workflow_path)
+
+    results = sorted(output_dir.glob("*_export.ome.tiff"))
+    assert {path.name for path in results} == {
+        "t1.ome_export.ome.tiff",
+        "t2.ome_export.ome.tiff",
+    }
+    shapes = {}
+    for path in results:
+        with tifffile.TiffFile(path) as tiff:
+            assert tiff.series[0].axes == "TYX"
+            shapes[path.name] = tiff.series[0].shape[0]
+    assert shapes == {"t1.ome_export.ome.tiff": 2, "t2.ome_export.ome.tiff": 3}

@@ -98,7 +98,7 @@ def test_open_file_multi_selection_passes_natural_sorted_tuple(
     kwargs = {
         "path_mode": True,
         "path": (b10, b2),
-        "stack_layout": "YX",
+        "stack_layout": "TYX",
         "layer_type": InputType.RAW.value,
         "new_layer_name": "",
     }
@@ -106,6 +106,26 @@ def test_open_file_multi_selection_passes_natural_sorted_tuple(
 
     task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
     assert task_kwargs["input_path"] == (b2, b10)
+
+
+def test_open_file_multi_selection_requires_t_layout(input_tab, mocker, caplog):
+    """A multi-file selection records a time series workflow: a t-less
+    stack layout would run on stacking inputs yet fail on time-series
+    inputs, so the schedule is refused instead of recording the trap."""
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.input.schedule_task",
+        autospec=True,
+    )
+    input_tab.path_changed_once = True
+    input_tab.widget_open_file(
+        path_mode=True,
+        path=(Path("/tmp/a.tiff"), Path("/tmp/b.tiff")),
+        stack_layout="YX",
+        layer_type=InputType.RAW.value,
+        new_layer_name="",
+    )
+    assert mocked_scheduler.call_count == 0
+    assert "must carry the time axis" in caplog.text
 
 
 def test_stack_layout_tooltip_mentions_t(input_tab):

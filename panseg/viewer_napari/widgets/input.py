@@ -186,6 +186,19 @@ class Input_Tab:
         if not self.path_changed_once:
             log("Please select a file to load!", thread="Input")
             return
+        paths = _natural_sorted_paths(path)
+        if len(paths) > 1 and "T" not in stack_layout.upper():
+            # the import would succeed either way (stacking adds the time
+            # axis), but the workflow records one stack_layout for all jobs:
+            # a spatial-only layout re-runs on stacking inputs yet fails on
+            # time-series inputs - the trap the prefill above avoids.
+            log(
+                "A multi-file import is one time series: the stack layout must "
+                "carry the time axis (e.g. tzyx), so the exported workflow also "
+                "runs on time-series inputs.",
+                thread="Input",
+            )
+            return
         if layer_type == InputType.RAW.value:
             semantic_type = SemanticType.RAW
         elif layer_type == InputType.SEGMENTATION.value:
@@ -198,7 +211,7 @@ class Input_Tab:
         schedule_task(
             import_image_task,
             task_kwargs={
-                "input_path": _natural_sorted_paths(path),
+                "input_path": paths,
                 "key": dataset_key,
                 "image_name": new_layer_name,
                 "semantic_type": semantic_type,

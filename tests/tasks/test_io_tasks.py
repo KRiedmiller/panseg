@@ -599,7 +599,6 @@ def test_import_image_task_list_stacks_time_series(tmp_path):
     assert isinstance(image, PanSegImage)
     assert image.image_layout == ImageLayout.TYX
     assert image.shape[0] == 3
-    assert image.properties.source_file_names == ["a1", "a2", "a10"]
 
 
 def test_import_image_task_list_stacks_channels(tmp_path):
@@ -643,7 +642,6 @@ def test_import_image_task_list_t_layout_stacks(tmp_path):
     assert isinstance(image, PanSegImage)
     assert image.image_layout == ImageLayout.TYX
     assert image.shape[0] == 2
-    assert image.properties.source_file_names == ["a1", "a2"]
 
 
 def test_import_image_task_list_t_slice_returns_task_message(tmp_path):

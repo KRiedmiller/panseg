@@ -1,7 +1,7 @@
 import logging
 import warnings
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional
 from xml.etree import ElementTree
 
 import numpy as np
@@ -345,132 +345,6 @@ def check_ome_single_file(path: Path) -> None:
             f"Multi-file OME-TIFF (UUID/FileName chain) is not supported, "
             f"{path.name} references other file(s): {foreign}"
         )
-
-
-def _description_root(tiff) -> Optional[ElementTree.Element]:
-    """Root element of the first IFD's ImageDescription, or None.
-
-    Unlike ``ome_metadata`` this does not require the reader to classify
-    the description as OME-XML: the BinaryOnly placeholder of a
-    companion-file OME-TIFF set carries its stub as the description, and
-    the reader reports no ome_metadata for it.
-
-    Args:
-        tiff (tifffile.TiffFile): an open tiff file
-
-    Returns:
-        ElementTree.Element | None: parsed description root, or None when
-            the description is absent or not XML
-    """
-    if not tiff.pages:
-        return None
-    description = tiff.pages[0].description
-    if description is None or not description.lstrip().startswith("<"):
-        return None
-    try:
-        return ElementTree.fromstring(description)
-    except ElementTree.ParseError:
-        return None
-
-
-def _binary_only_metadata_file(root: ElementTree.Element) -> Optional[str]:
-    """The MetadataFile companion name if the OME-XML carries BinaryOnly.
-
-    A BinaryOnly element marks a placeholder file: the OME-XML of the set
-    lives in the named companion file (a ``.companion.ome``), not in the
-    TIFF itself.
-
-    Args:
-        root (ElementTree.Element): parsed OME-XML root
-
-    Returns:
-        str | None: the MetadataFile attribute, or None when no BinaryOnly
-            element is present
-    """
-    for element in root.iter():
-        if element.tag.find("BinaryOnly") != -1:
-            return element.get("MetadataFile")
-    return None
-
-
-def check_ome_multifile_selection(paths: Sequence[Path]) -> None:
-    """Raise ValueError when a multi-file selection is a multifile OME-TIFF set.
-
-    Independent files and the members of a multifile OME-TIFF set look
-    identical in a file dialog; only the OME-XML cross-references tell them
-    apart. This is the selection-level counterpart of ``check_ome_single_file``
-    (the same chaining condition, applied over the whole selection), run
-    before any pixel data is read - ``tifffile`` follows FileName references
-    on read, so a naive per-file stack of a chained set would duplicate or
-    zero-pad data instead of raising.
-
-    Only paths with a TIFF extension are inspected; other formats have no
-    multifile concept here. A file is a set member when its first-IFD
-    OME-XML (metadata only, no pixel data) either is a BinaryOnly
-    placeholder naming a companion metadata file, or chains other files
-    into the series: more than one distinct UUID over the TiffData of the
-    first Image, or a FileName that does not match the file itself
-    (self-referencing UUIDs without FileName remain legal single-file
-    encodings). Independent files raise nothing.
-
-    Args:
-        paths (Sequence[Path]): the selected file paths
-
-    Raises:
-        ValueError: if any member is found. A complete set (every FileName
-            referenced by the members is selected) and a partial set (some
-            referenced companions are missing from the selection) both name
-            the files involved; a BinaryOnly placeholder names its
-            MetadataFile companion.
-    """
-    selection_names = {path.name.lower() for path in paths}
-    chain_members: list[Path] = []
-    binary_only: list[tuple[Path, str]] = []
-    referenced: set[str] = set()
-    for path in paths:
-        if path.suffix.lower() not in TIFF_EXTENSIONS:
-            continue
-        with tifffile.TiffFile(path) as tiff:
-            pixels = _first_ome_pixels(tiff)
-            root = _description_root(tiff)
-        if root is not None:
-            metadata_file = _binary_only_metadata_file(root)
-            if metadata_file is not None:
-                binary_only.append((path, metadata_file))
-                continue
-        if pixels is None:
-            continue
-
-        pairs = _tiff_data_uuid_pairs(pixels, path)
-        referenced |= {name for _, name in pairs}
-
-        foreign = sorted(
-            {name for _, name in pairs if name.lower() != path.name.lower()}
-        )
-        if len(pairs) > 1 or foreign:
-            chain_members.append(path)
-
-    if binary_only:
-        placeholders = sorted(path.name for path, _ in binary_only)
-        companions = sorted({metadata_file for _, metadata_file in binary_only})
-        raise ValueError(
-            f"Multi-file OME-TIFF is not supported: {placeholders} hold(s) only "
-            "a BinaryOnly placeholder of a multifile OME-TIFF series, the "
-            f"OME-XML lives in the companion file(s) {companions}"
-        )
-
-    if not chain_members:
-        return
-
-    involved = sorted({path.name for path in chain_members} | referenced)
-    missing = sorted(name for name in referenced if name.lower() not in selection_names)
-    message = (
-        f"The selected files {involved} are one multifile OME-TIFF series, "
-        "not N independent images; multifile OME-TIFF is not supported"
-    )
-    if missing:
-        message += f"; the referenced file(s) {missing} are missing from the selection"
-    raise ValueError(message)
 
 
 def create_tiff(

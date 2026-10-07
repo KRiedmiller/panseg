@@ -18,7 +18,6 @@ from panseg.io.io import natural_sort_key, smart_load_with_vs
 from panseg.io.mesh import create_mesh
 from panseg.io.tiff import (
     TIFF_EXTENSIONS,
-    check_ome_multifile_selection,
     check_ome_single_file,
     create_tiff,
     read_ome_time_spacing,
@@ -206,10 +205,6 @@ class ImageProperties(BaseModel):
         image_layout (ImageLayout): Image layout of the image
         original_voxel_size (VoxelSize): Original voxel size of the image
         source_file_name (str | None): Name of the source file
-        source_file_names (list[str] | None): Stems of all source files in
-            timepoint order, set only by multi-file import. None for every
-            single-file import, h5/zarr load and napari roundtrip of older
-            files; the first element equals source_file_name.
         t_spacing (float | None): Time spacing between timepoints.
             None means the source carried no timing metadata.
         t_unit (str): Unit of the time spacing. Normalized to "s" at
@@ -223,7 +218,6 @@ class ImageProperties(BaseModel):
     image_layout: ImageLayout
     original_voxel_size: VoxelSize
     source_file_name: str | None = None
-    source_file_names: list[str] | None = None
     t_spacing: float | None = None
     t_unit: str = "s"
 
@@ -813,7 +807,6 @@ def restack_timepoints(
     t_spacing: float | None,
     t_unit: str = "s",
     name: str | None = None,
-    source_file_names: list[str] | None = None,
 ) -> PanSegImage:
     """Restack single-timepoint images into a timeseries along a new outer T axis.
 
@@ -832,10 +825,6 @@ def restack_timepoints(
         t_unit (str): unit of the time spacing, normalized to seconds.
         name (str | None): name of the restacked image; defaults to the
             first timepoint's name plus "_restacked".
-        source_file_names (list[str] | None): stems of the source files in
-            timepoint order (the multi-file import path). None propagates
-            the first timepoint's provenance, so the split -> run ->
-            restack loop of a frame-mapped task preserves it.
     """
     if not timepoints:
         raise ValueError("Restacking needs at least one timepoint")
@@ -873,11 +862,6 @@ def restack_timepoints(
         image_layout=ImageLayout("T" + first.image_layout.value),
         original_voxel_size=first.original_voxel_size,
         source_file_name=first.source_file_name,
-        source_file_names=(
-            source_file_names
-            if source_file_names is not None
-            else first.properties.source_file_names
-        ),
         t_spacing=t_spacing,
         t_unit=t_unit,
     )
@@ -1006,19 +990,6 @@ def _parse_slicing(slicing: str) -> list[slice | int]:
     return entries
 
 
-def _slicing_entry_to_str(entry: slice | int) -> str:
-    """Render a _parse_slicing entry back to its slicing-string fragment."""
-    if isinstance(entry, int):
-        return str(entry)
-    fields = (
-        "" if start is None else str(start) for start in (entry.start, entry.stop)
-    )
-    text = ":".join(fields)
-    if entry.step is not None:
-        text = f"{text}:{entry.step}"
-    return text
-
-
 def crop_to_stack_layout(
     data: np.ndarray, stack_layout: str, slicing: str
 ) -> tuple[str, np.ndarray]:
@@ -1065,10 +1036,11 @@ def _strip_stacked_time_axis(stack_layout: str) -> str:
     single-file job, by contrast, imports through the exact-match path: a
     still file into a time series workflow errors instead of losing its t.
 
-    A slice entry on the time axis has no per-file meaning: a bare ":" is
-    dropped (no truncation intent, the remaining entries realign to the
-    spatial axes), any other entry is rejected - the time axis of a
-    selection exists only after the files are stacked.
+    A slice entry on the time axis is rejected outright: the time axis of
+    a selection exists only after stacking, so there is no per-file meaning
+    to preserve - not even for a bare ":". Slicing entries that sit before
+    the time axis are kept: their axes keep their positions when the time
+    axis is dropped, so they apply to every file unchanged.
 
     Args:
         stack_layout (str): layout spec, letters with an optional slice
@@ -1077,9 +1049,8 @@ def _strip_stacked_time_axis(stack_layout: str) -> str:
         str: the spatial layout spec to apply to every file
 
     Raises:
-        ValueError: if the layout slices the time axis with more than a
-            bare ":", carries the time axis twice, or has no spatial axes
-            left without it
+        ValueError: if the layout slices the time axis at all, carries the
+            time axis twice, or has no spatial axes left without it
     """
     letters, slicing = split_stack_layout(stack_layout)
     tokens = _layout_tokens(letters)
@@ -1094,18 +1065,12 @@ def _strip_stacked_time_axis(stack_layout: str) -> str:
     if slicing is not None:
         entries = _parse_slicing(slicing)
         if len(entries) > t_position:
-            t_entry = entries[t_position]
-            if t_entry != slice(None):
-                raise ValueError(
-                    f"Stack layout {stack_layout!r} slices the time axis, but a "
-                    "multi-file import gets the time axis from stacking: the "
-                    "spatial entries apply to every file, and the stacked "
-                    "series cannot be truncated through the layout."
-                )
-            # a bare ":" carries no truncation intent: drop it so the
-            # remaining entries realign to the spatial axes
-            entries.pop(t_position)
-            slicing = ",".join(_slicing_entry_to_str(entry) for entry in entries)
+            raise ValueError(
+                f"Stack layout {stack_layout!r} slices the time axis, but a "
+                "multi-file import gets the time axis from stacking: the "
+                "spatial entries apply to every file, and the stacked "
+                "series cannot be truncated through the layout."
+            )
     spatial = "".join(
         f"{'-' if inverted else ''}{char}"
         for i, (char, inverted) in enumerate(tokens)
@@ -1160,7 +1125,7 @@ def _import_image_sequence(
         )
     if len(paths) == 1:
         # a one-file selection imports exactly as a single path: no
-        # sorting, no selection guard, no source_file_names
+        # sorting and no selection guard
         return import_image(
             path=paths[0],
             key=key,
@@ -1176,10 +1141,9 @@ def _import_image_sequence(
         )
 
     paths = sorted(paths, key=natural_sort_key)
-    # fail fast, before any pixel data is read: a selection can be one
-    # multifile OME-TIFF series (chained UUID/FileName references or
-    # BinaryOnly placeholders) instead of independent images
-    check_ome_multifile_selection(paths)
+    # a member of a multifile OME-TIFF chain (or a BinaryOnly placeholder)
+    # is rejected by the per-file check during the first file's import,
+    # before any pixel data is read
 
     # the layout may carry T: it describes the stacked series, so the
     # spatial remainder is what applies to every file
@@ -1213,7 +1177,6 @@ def _import_image_sequence(
         result_name = image_name
     else:
         result_name = paths[0].stem
-    source_file_names = [entry.stem for entry in paths]
 
     stacked = []
     n_channels = counts[0]
@@ -1228,7 +1191,6 @@ def _import_image_sequence(
                 t_spacing=None,
                 t_unit="s",
                 name=result_name if n_channels == 1 else f"{result_name}_{index}",
-                source_file_names=source_file_names,
             )
         )
     return stacked[0] if len(stacked) == 1 else stacked
@@ -1251,8 +1213,7 @@ def import_image(
     a selection is one stacked series, so its t is stripped and stacking
     adds the time axis; a single file imports through the exact-match path,
     where the layout must match the file's own axes - a still file into a
-    time series workflow errors. The stems of the source files are recorded
-    in ImageProperties.source_file_names.
+    time series workflow errors.
 
     Args:
         path (Path | Sequence[Path]): path to the image file, or a

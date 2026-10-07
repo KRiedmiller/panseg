@@ -1938,80 +1938,21 @@ def test_import_image_sequence_single_file_matches_path_import(tmp_path):
     assert isinstance(from_list, PanSegImage)
     assert from_list.properties == direct.properties
     np.testing.assert_array_equal(from_list.get_data(), direct.get_data())
-    assert from_list.properties.source_file_names is None
 
 
-def test_import_image_sequence_sets_source_file_names(tmp_path):
+def test_import_image_sequence_natural_order(tmp_path):
+    """Timepoint k is the k-th file in natural filename order: the
+    selection is given as a10, a2, a1 and stacks as a1, a2, a10."""
     paths = [
         write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
         for stem, value in (("a10", 10), ("a2", 2), ("a1", 1))
     ]
     image = import_image(path=paths, semantic_type="segmentation", stack_layout="YX")
-    assert image.properties.source_file_names == ["a1", "a2", "a10"]
     assert image.properties.source_file_name == "a1"
-
-
-def test_image_properties_source_file_names_json_roundtrip():
-    properties = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=VoxelSize(),
-        image_layout=ImageLayout.TYX,
-        original_voxel_size=VoxelSize(),
-        source_file_names=["a1", "a2"],
-    )
-    restored = ImageProperties(**json.loads(properties.model_dump_json()))
-    assert restored.source_file_names == ["a1", "a2"]
-
-
-def test_image_properties_old_json_without_source_file_names():
-    """Blobs written before the field existed load with it None."""
-    properties = ImageProperties(
-        name="image",
-        semantic_type=SemanticType.RAW,
-        voxel_size=VoxelSize(),
-        image_layout=ImageLayout.YX,
-        original_voxel_size=VoxelSize(),
-    )
-    blob = json.loads(properties.model_dump_json())
-    blob.pop("source_file_names", None)
-    assert ImageProperties(**blob).source_file_names is None
-
-
-def test_restack_timepoints_propagates_first_timepoint_source_file_names():
-    series = PanSegImage(
-        np.zeros((3, 8, 8), dtype="uint16"),
-        ImageProperties(
-            name="image",
-            semantic_type=SemanticType.SEGMENTATION,
-            voxel_size=VoxelSize(),
-            image_layout=ImageLayout.TYX,
-            original_voxel_size=VoxelSize(),
-            source_file_names=["a1", "a2", "a3"],
-        ),
-    )
-    restacked = restack_timepoints(series.split_timepoints(), t_spacing=None)
-    assert restacked.properties.source_file_names == ["a1", "a2", "a3"]
-
-
-def test_restack_timepoints_explicit_source_file_names_win():
-    series = PanSegImage(
-        np.zeros((2, 8, 8), dtype="uint16"),
-        ImageProperties(
-            name="image",
-            semantic_type=SemanticType.SEGMENTATION,
-            voxel_size=VoxelSize(),
-            image_layout=ImageLayout.TYX,
-            original_voxel_size=VoxelSize(),
-            source_file_names=["a1", "a2"],
-        ),
-    )
-    restacked = restack_timepoints(
-        series.split_timepoints(),
-        t_spacing=None,
-        source_file_names=["b1", "b2"],
-    )
-    assert restacked.properties.source_file_names == ["b1", "b2"]
+    for timepoint, value in enumerate((1, 2, 10)):
+        np.testing.assert_array_equal(
+            image.get_data()[timepoint], np.full((8, 8), value)
+        )
 
 
 def test_import_image_sequence_slicing_applies_to_every_file(tmp_path):
@@ -2043,7 +1984,6 @@ def test_import_image_sequence_t_layout_matches_spatial(tmp_path):
     assert with_t.image_layout == ImageLayout.TYX
     assert with_t.shape == without_t.shape
     np.testing.assert_array_equal(with_t.get_data(), without_t.get_data())
-    assert with_t.properties.source_file_names == ["a1", "a2"]
 
 
 def test_import_image_sequence_tzyx_layout_stacks_3d(tmp_path):
@@ -2075,33 +2015,33 @@ def test_import_image_sequence_tcx_layout_stacks_channels(tmp_path):
     np.testing.assert_array_equal(images[1].get_data()[0], np.full((8, 8), 1))
 
 
-def test_import_image_sequence_rejects_t_slice(tmp_path):
-    """A slice entry on the time axis has no per-file meaning for a
-    selection: the time axis exists only after stacking, so the spec is
-    rejected instead of silently dropping the truncation."""
+@pytest.mark.parametrize("layout", ["TYX[:1,:,:]", "TYX[:,:,:]", "TZYX[:, 0:2,:,:]"])
+def test_import_image_sequence_rejects_t_slice(tmp_path, layout):
+    """Any slice entry on the time axis is rejected for a selection: the
+    time axis exists only after stacking, so no per-file meaning can be
+    preserved - not even for a bare ":"."""
     paths = [
         write_still_tiff(tmp_path / "a1.tiff", (8, 8), 1),
         write_still_tiff(tmp_path / "a2.tiff", (8, 8), 2),
     ]
     with pytest.raises(ValueError, match="slices the time axis"):
-        import_image(
-            path=paths, semantic_type="segmentation", stack_layout="TYX[:1,:,:]"
-        )
+        import_image(path=paths, semantic_type="segmentation", stack_layout=layout)
 
 
-def test_import_image_sequence_spatial_slice_with_t_layout(tmp_path):
-    """Slice entries before the T stay with their spatial axis; the slice
-    applies to every file as before."""
+def test_import_image_sequence_spatial_slice_before_t(tmp_path):
+    """Slice entries before the time axis keep their axis when the t is
+    stripped, and apply to every file."""
     paths = [
         write_still_tiff(tmp_path / f"{stem}.tiff", (4, 8, 8), value)
         for stem, value in (("a1", 1), ("a2", 2))
     ]
     image = import_image(
-        path=paths, semantic_type="segmentation", stack_layout="TZYX[:, 0:2,:,:]"
+        path=paths, semantic_type="segmentation", stack_layout="ZTYX[0:2]"
     )
     assert image.image_layout == ImageLayout.TZYX
     assert image.shape == (2, 2, 8, 8)
     np.testing.assert_array_equal(image.get_data()[0], np.full((2, 8, 8), 1))
+    np.testing.assert_array_equal(image.get_data()[1], np.full((2, 8, 8), 2))
 
 
 def test_import_image_sequence_rejects_time_only_layout(tmp_path):
@@ -2208,7 +2148,7 @@ def test_import_image_sequence_rejects_empty_list():
 
 def test_import_image_sequence_rejects_nonexistent_file(tmp_path):
     path = write_still_tiff(tmp_path / "a1.tiff", (8, 8), 1)
-    with pytest.raises(ValueError, match="missing.tif") as exc_info:
+    with pytest.raises(ValueError, match="missing.tif"):
         import_image(
             path=[path, tmp_path / "missing.tif"],
             semantic_type="segmentation",
@@ -2216,33 +2156,12 @@ def test_import_image_sequence_rejects_nonexistent_file(tmp_path):
         )
 
 
-def test_import_image_sequence_rejects_partial_ome_chain(
-    ome_timeseries_multifile, tmp_path
-):
-    """A member whose referenced companion is absent names the missing file."""
-    first, _, _ = ome_timeseries_multifile
-    still = write_still_tiff(tmp_path / "independent.tiff", (8, 8), 1)
-    with pytest.raises(ValueError, match="multifile OME-TIFF") as exc_info:
-        import_image(path=[first, still], semantic_type="raw", stack_layout="YX")
-    assert "missing from the selection" in str(exc_info.value)
-    assert "multifile_second.ome.tif" in str(exc_info.value)
-
-
-def test_import_image_sequence_rejects_complete_ome_chain(ome_timeseries_multifile):
+def test_import_image_sequence_rejects_ome_chain_member(ome_timeseries_multifile):
+    """A member of a multifile OME-TIFF chain is rejected by the per-file
+    check during the sequence import, before any pixel data is read."""
     first, second, _ = ome_timeseries_multifile
-    with pytest.raises(ValueError, match="one multifile OME-TIFF series") as exc_info:
+    with pytest.raises(ValueError, match="Multi-file OME-TIFF"):
         import_image(path=[first, second], semantic_type="raw", stack_layout="ZYX")
-    assert "missing from the selection" not in str(exc_info.value)
-
-
-def test_import_image_sequence_rejects_binary_only_member(ome_binary_only_set):
-    first, second, companion = ome_binary_only_set
-    with pytest.raises(ValueError, match="BinaryOnly"):
-        import_image(
-            path=[first, second, companion],
-            semantic_type="raw",
-            stack_layout="YX",
-        )
 
 
 def test_import_image_sequence_ome_stills_stack(tmp_path):

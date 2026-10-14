@@ -137,7 +137,6 @@ def set_voxel_size_task(
     Args:
         image (PanSegImage): input image
         voxel_size (tuple[float, float, float]): new voxel size
-
     """
     new_voxel_size = VoxelSize(voxels_size=voxel_size)
     new_image = image.derive_new(
@@ -155,9 +154,6 @@ def set_t_spacing_task(
     image: PanSegImage, t_spacing: float | None, t_unit: str = "s"
 ) -> PanSegImage:
     """Set the time spacing of a timeseries image.
-
-    Property-only: the data is unchanged. Mirrors set_voxel_size_task, but
-    for the time axis.
 
     Note: on a timeseries input with a known spacing, t_spacing=None does
     not clear the restacked output's spacing - the restacked output takes
@@ -438,6 +434,8 @@ def image_pair_operation_task(
 ) -> PanSegImage:
     """
     Task to perform an operation on two images.
+
+    Supports timepoint broadcasting for mixing time series and still images.
 
     Args:
         image1 (PanSegImage): First image to process.

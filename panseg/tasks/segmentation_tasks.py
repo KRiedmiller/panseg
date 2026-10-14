@@ -205,12 +205,16 @@ def lmc_segmentation_task(
     """Lifted multicut segmentation task.
 
     Args:
-        boundary_pmap (PanSegImage): cell boundary prediction, PanSegImage of shape (Z, Y, X) with values between 0 and 1.
-        superpixels (PanSegImage): superpixels/over-segmentation. Must have the same shape as boundary_pmap.
-        nuclei (PanSegImage): a nuclear segmentation or prediction map. Must have the same shape as boundary_pmap.
+        boundary_pmap (PanSegImage): cell boundary prediction, PanSegImage of
+            shape (Z, Y, X) with values between 0 and 1.
+        superpixels (PanSegImage): superpixels/over-segmentation.
+            Must have the same shape as boundary_pmap.
+        nuclei (PanSegImage): a nuclear segmentation or prediction map.
+            Must have the same shape as boundary_pmap.
         beta (float): beta parameter for the Multicut.
-            A small value will steer the segmentation towards under-segmentation, while
-            a high-value bias the segmentation towards the over-segmentation. (default: 0.5)
+            A small value will steer the segmentation towards under-segmentation,
+            while a high-value bias the segmentation towards the
+            over-segmentation. (default: 0.5)
         post_min_size (int): minimal size of the segments after Multicut. (default: 100)
 
     On timeseries input the task runs per timepoint: label IDs are independent

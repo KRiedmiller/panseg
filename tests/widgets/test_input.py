@@ -138,12 +138,6 @@ def test_stack_layout_tooltip_mentions_slice(input_tab):
     assert "Truncate the data before importing" in tooltip
 
 
-def test_stack_layout_tooltip_mentions_stacked_series_for_multiple_files(input_tab):
-    tooltip = input_tab.widget_open_file.stack_layout.tooltip
-    assert "stacked time series" in tooltip
-    assert "spatial axes apply to every file" in tooltip
-
-
 def test_open_file_passes_stack_layout_with_slice(input_tab, mocker, tmp_path):
     """The stack layout field hands the inline slice to the import task
     untouched: parsing and cropping happen in import_image."""

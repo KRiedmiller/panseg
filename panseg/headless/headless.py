@@ -137,7 +137,8 @@ def collect_jobs_list(
     else:
         allow_dir = True
 
-    all_jobs = []
+    all_jobs = []  # disconnected graphs go here
+    # inputs: disconnected from the beginning, not by subdirectory
     for input_dict in inputs:
         if not isinstance(input_dict, dict):
             raise ValueError(f"Input {input_dict} should be a dictionary.")
@@ -162,11 +163,29 @@ def collect_jobs_list(
         list_keys = list(inputs_files.keys())
         list_jobs = [dict(zip(list_keys, files)) for files in list_files]
 
+        # each job = one subdirectory or input file
         for job in list_jobs:
             for key, value in input_dict.items():
                 if key not in job:
                     job[key] = value
+
+            # avoid name collision from subdirs
+            if (
+                len(list_jobs) > 1
+                and isinstance(job[list_keys[0]], list)
+                and "name_pattern" in job
+            ):
+                subdirs = ""
+                for input_key in list_keys:
+                    subdir = job[input_key][0].parent.name
+                    subdirs = subdirs + subdir
+                npat: str = job["name_pattern"]
+                job["name_pattern"] = npat.replace(
+                    "{file_name}", subdirs + "_{file_name}"
+                )
+
             all_jobs.append(job)
+
     return all_jobs
 
 

@@ -12,12 +12,37 @@ import yaml
 
 from panseg import FILE_CONFIG_TRAIN_YAML
 from panseg.functionals.training.h5dataset import HDF5Dataset
+from panseg.functionals.training.model import UNet2D
 from panseg.functionals.training.train import (
     create_datasets,
     create_model_config,
     find_h5_files,
     unet_training,
+    zero_mean_unit_variance,
 )
+
+
+def _write_checkpoints(mock_trainer_class, checkpoint_dir, make_states=None):
+    """Let the mocked UNetTrainer leave checkpoint files behind like the real one.
+
+    `unet_training` loads the packaged weights to generate the bioimageio test
+    tensors, so a checkpoint has to exist after `train()` returns.
+    """
+
+    def _train():
+        model = mock_trainer_class.call_args.kwargs["model"]
+        if make_states is None:
+            states = {
+                "best_checkpoint.pytorch": model.state_dict(),
+                "last_checkpoint.pytorch": model.state_dict(),
+            }
+        else:
+            states = make_states(model)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        for name, state in states.items():
+            torch.save(state, checkpoint_dir / name)
+
+    mock_trainer_class.return_value.train.side_effect = _train
 
 
 class TestFindH5Files:
@@ -332,6 +357,8 @@ class TestUnetTraining:
         mock_trainer_instance = MagicMock()
         mock_trainer.return_value = mock_trainer_instance
 
+        _write_checkpoints(mock_trainer, tmp_path / "test_model_2d")
+
         mock_data_loader.return_value = [
             (  # b, c, z,  x,  y
                 torch.from_numpy(np.random.rand(1, 1, 1, 64, 64)).type(torch.float32),
@@ -401,6 +428,8 @@ class TestUnetTraining:
         mock_trainer_instance = MagicMock()
         mock_trainer.return_value = mock_trainer_instance
 
+        _write_checkpoints(mock_trainer, tmp_path / "test_model_3d")
+
         mock_data_loader.return_value = [
             (
                 torch.from_numpy(np.random.rand(1, 1, 16, 64, 64)).type(torch.float32),
@@ -441,8 +470,114 @@ class TestUnetTraining:
         assert mock_create_datasets.call_count == 2
 
         mock_model_desc.assert_called_once()
+        assert mock_model_desc.call_args.kwargs["final_sigmoid"] is False
         assert (tmp_path / model_name / "test_in.npy").exists()
         assert (tmp_path / model_name / "test_out.npy").exists()
+
+    @patch("panseg.functionals.training.train.test_model")
+    @patch("panseg.functionals.training.train.make_model_description")
+    @patch("panseg.functionals.training.train.UNetTrainer")
+    @patch("panseg.functionals.training.train.create_datasets")
+    @patch("panseg.functionals.training.train.create_model_config")
+    @patch("panseg.functionals.training.train.DataLoader")
+    @patch("panseg.functionals.training.train.ConcatDataset")
+    def test_test_tensors_reproduced_from_packaged_weights(
+        self,
+        mock_concat,
+        mock_data_loader,
+        mock_create_config,
+        mock_create_datasets,
+        mock_trainer,
+        mock_model_desc,
+        mock_test_model,
+        tmp_path,
+    ):
+        """test_out must come from the packaged weights and test_in must be raw.
+
+        Regression test: test_out used to be generated from the live model (the
+        last training state) while the package shipped `best_checkpoint.pytorch`,
+        so `bioimageio.core.test_model` could not reproduce the test outputs.
+        test_in used to be stored pre-normalized, although the model description
+        declares ZeroMeanUnitVariance preprocessing.
+        """
+        torch.manual_seed(0)
+
+        mock_dataset = MagicMock()
+        mock_dataset.__len__.return_value = 10
+        mock_create_datasets.return_value = [mock_dataset]
+        mock_create_config.side_effect = create_model_config
+
+        loader_batch = torch.from_numpy(
+            np.random.rand(1, 1, 1, 64, 64).astype("float32")
+        )
+        mock_data_loader.return_value = [(loader_batch, None)]
+
+        # the mocked trainer leaves two *different* checkpoints behind:
+        # best_checkpoint holds zeroed weights, last_checkpoint the initial ones
+        def make_states(model):
+            last = model.state_dict()
+            best = {k: torch.zeros_like(v) for k, v in last.items()}
+            return {"best_checkpoint.pytorch": best, "last_checkpoint.pytorch": last}
+
+        mock_trainer_instance = MagicMock()
+        mock_trainer.return_value = mock_trainer_instance
+        model_name = "test_model_export"
+        _write_checkpoints(mock_trainer, tmp_path / model_name, make_states)
+
+        dataset_dir = tmp_path / "dataset"
+        (dataset_dir / "train").mkdir(parents=True)
+        (dataset_dir / "val").mkdir()
+
+        with (
+            patch("panseg.functionals.training.train.PATH_PANSEG_MODELS", tmp_path),
+            patch("panseg.core.zoo.PATH_PANSEG_MODELS", tmp_path),
+        ):
+            unet_training(
+                dataset_dir=str(dataset_dir),
+                model_name=model_name,
+                in_channels=1,
+                out_channels=1,
+                feature_maps=(16, 16),
+                patch_size=(1, 64, 64),
+                max_num_iters=100,
+                dimensionality="2D",
+                sparse=False,
+                device="cpu",
+            )
+
+        checkpoint_dir = tmp_path / model_name
+        weights = checkpoint_dir / "best_checkpoint.pytorch"
+        assert mock_model_desc.call_args.kwargs["weights"] == weights
+
+        test_in = np.load(checkpoint_dir / "test_in.npy")
+        test_out = np.load(checkpoint_dir / "test_out.npy")
+
+        # test_in is stored as produced by the loader, un-normalized
+        assert np.array_equal(test_in, loader_batch.squeeze(dim=-3).numpy())
+
+        def _predict(state):
+            model = UNet2D(
+                in_channels=1,
+                out_channels=1,
+                f_maps=(16, 16),
+                final_sigmoid=True,
+                layer_order="bcr",
+            )
+            model.load_state_dict(state)
+            model.eval()
+            with torch.no_grad():
+                out = model(zero_mean_unit_variance(torch.from_numpy(test_in)))
+            return out.numpy()
+
+        best_out = _predict(torch.load(weights, map_location="cpu"))
+        last_out = _predict(
+            torch.load(checkpoint_dir / "last_checkpoint.pytorch", map_location="cpu")
+        )
+
+        # test_out reproduces from the packaged (best) weights ...
+        assert np.allclose(test_out, best_out, atol=1e-6)
+        # ... and not from the last training state
+        assert not np.allclose(test_out, last_out, atol=1e-3)
 
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
@@ -540,6 +675,15 @@ class TestUnetTraining:
 
         mock_trainer_instance = MagicMock()
         mock_trainer.return_value = mock_trainer_instance
+
+        _write_checkpoints(
+            mock_trainer,
+            tmp_path / "test_model_multi_gpu",
+            lambda model: {
+                "best_checkpoint.pytorch": {},
+                "last_checkpoint.pytorch": {},
+            },
+        )
 
         mock_data_loader.return_value = [
             (

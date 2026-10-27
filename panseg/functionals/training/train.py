@@ -1,7 +1,7 @@
 import logging
 from contextlib import chdir
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, TypeVar
 
 import numpy as np
 import torch
@@ -27,6 +27,25 @@ from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.functionals.training.trainer import UNetTrainer
 
 logger = logging.getLogger(__name__)
+
+
+_T = TypeVar("_T", np.ndarray, torch.Tensor)
+
+ZMUV_EPS = 1e-6
+"""Epsilon of the `ZeroMeanUnitVarianceDescr` preprocessing declared for the input."""
+
+
+def zero_mean_unit_variance(x: _T) -> _T:
+    """Apply the input preprocessing declared in the model description.
+
+    Mirrors `ZeroMeanUnitVarianceDescr()` with its default kwargs (normalize all
+    axes jointly, `eps=1e-6`), i.e. exactly the normalization `bioimageio.core`
+    applies to the test tensor before inference and to raw inputs at prediction
+    time.
+    """
+    mean = x.mean()
+    std = ((x - mean) ** 2).mean() ** 0.5
+    return (x - mean) / (std + ZMUV_EPS)
 
 
 def create_model_config(
@@ -214,27 +233,34 @@ def unet_training(
     if not weights.exists():
         weights = checkpoint_dir / "last_checkpoint.pytorch"
 
-    # Obtain and save test in- and output for biio
-    test_in, _ = next(iter(loaders["train"]))
-    # normalize, as this is post-augmentations
-    test_in = (test_in - test_in.mean()) / (test_in.std() + 1e-6)
+    # Generate the test tensors from the weights that are packaged below
+    net = model.module if isinstance(model, nn.DataParallel) else model
+    del model
+    net.load_state_dict(torch.load(weights, map_location="cpu"))
 
-    if isinstance(model, UNet2D):
+    # Obtain and save test in- and output for biio.
+    # test_in is stored un-normalized: the model description declares
+    # ZeroMeanUnitVariance preprocessing, which bioimageio.core applies to the test
+    # tensor before inference. Apply the very same preprocessing here so that the
+    # stored test_out corresponds to preprocess(test_in).
+    test_in, _ = next(iter(loaders["train"]))
+
+    if isinstance(net, UNet2D):
         # remove the singleton z-dimension from the input
         # Extra dim was only added in the panseg loader for the augmentations
         # Stored data and model are true 2D models
         # Note the loader adds a batch dimension
         test_in = torch.squeeze(test_in, dim=-3)
 
-    model.eval()
-    test_out = model(test_in.to(device))
+    net.eval()
+    test_out = net(zero_mean_unit_variance(test_in).to(device))
 
     np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
     np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
 
     try:
         axis_min_sizes = np.min(
-            (model_zoo.compute_3D_halo_for_pytorch3dunet(model), patch_size), axis=0
+            (model_zoo.compute_3D_halo_for_pytorch3dunet(net), patch_size), axis=0
         )
     except ValueError:
         axis_min_sizes = patch_size
@@ -246,6 +272,7 @@ def unet_training(
             in_channels=in_channels,
             out_channels=out_channels,
             feature_maps=feature_maps,
+            final_sigmoid=final_sigmoid,
             axis_min_sizes=axis_min_sizes,
             dimensionality=dimensionality,
             layer_order=layer_order,

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from bioimageio.spec.model.v0_5 import AxisId, TensorId
 
 from panseg.functionals.training.biio import (
     PANSEG_CITATION,
@@ -34,6 +35,7 @@ def make_description(model_dir, **overrides):
         "in_channels": 1,
         "out_channels": 1,
         "feature_maps": 64,
+        "final_sigmoid": True,
         "axis_min_sizes": (16, 32, 64),
         "dimensionality": "3D",
         "layer_order": "bcr",
@@ -102,6 +104,62 @@ def test_make_model_description_defaults(model_dir):
     assert desc.documentation is None
     assert [str(c) for c in desc.covers] == ["cover.png"]
     assert (model_dir / "cover.png").exists()
+
+
+def test_make_model_description_final_sigmoid_kwarg(model_dir):
+    """The exported architecture must reproduce the trained model's final activation."""
+    desc = make_description(model_dir, final_sigmoid=False)
+    kwargs = desc.weights.pytorch_state_dict.architecture.kwargs
+    assert kwargs["final_sigmoid"] is False
+
+    desc = make_description(model_dir, final_sigmoid=True)
+    kwargs = desc.weights.pytorch_state_dict.architecture.kwargs
+    assert kwargs["final_sigmoid"] is True
+
+
+def test_axes_use_exactly_representable_scales(model_dir):
+    """Axis scales are exact for the size arithmetic of bioimageio.spec.
+
+    Resolutions that are not exact as floats (0.24) are declared as integer
+    counts of a finer unit (240 nanometer); exact resolutions (1.0) stay in
+    micrometers. Input and output axes must agree.
+    """
+    desc = make_description(model_dir, resolution=(0.24, 0.22, 1.0))
+
+    in_axes = {a.id: a for a in desc.inputs[0].axes if a.id in ("z", "y", "x")}
+    out_axes = {a.id: a for a in desc.outputs[0].axes if a.id in ("z", "y", "x")}
+    expected = {
+        "z": (240.0, "nanometer"),
+        "y": (220.0, "nanometer"),
+        "x": (1.0, "micrometer"),
+    }
+    for axis_id, (scale, unit) in expected.items():
+        assert (in_axes[axis_id].scale, in_axes[axis_id].unit) == (scale, unit)
+        assert (out_axes[axis_id].scale, out_axes[axis_id].unit) == (scale, unit)
+
+
+def test_output_sizes_match_input_sizes(model_dir):
+    """Output sizes must equal input sizes for every size parameter n.
+
+    Regression test for the float truncation in bioimageio.spec's
+    `SizeReference.get_size`: for resolutions like 0.24 it computes
+    `int(44 * 0.24 / 0.24)` as `int(43.999...) = 43`. The output scale
+    workaround (`_size_preserving_scale`) keeps the resolved output sizes equal
+    to the input sizes.
+    """
+    desc = make_description(
+        model_dir,
+        resolution=(0.24, 0.24, 0.24),
+        axis_min_sizes=(16, 43, 44),
+    )
+
+    for n in (0, 1, 2):
+        ns = {(TensorId("input"), AxisId(a)): n for a in ("z", "y", "x")}
+        sizes = desc.get_axis_sizes(ns, batch_size=2)
+        for a in ("z", "y", "x"):
+            key = (TensorId("output"), AxisId(a))
+            in_size = sizes.inputs[(TensorId("input"), AxisId(a))]
+            assert sizes.outputs[key] == in_size, f"n={n}, axis={a}"
 
 
 def test_make_model_description_invalid_author(model_dir):

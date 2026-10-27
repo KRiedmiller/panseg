@@ -1,4 +1,6 @@
+import logging
 import re
+from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
@@ -31,6 +33,8 @@ from imageio.v3 import imwrite
 from pydantic import ValidationError
 
 from panseg.functionals.training.augs import PercentileNormalizer
+
+logger = logging.getLogger(__name__)
 
 PANSEG_CITATION = CiteEntry(
     text=(
@@ -127,6 +131,55 @@ def _normalize_for_display(
     return np.clip(PercentileNormalizer(pmin=pmin, pmax=pmax)(img), 0.0, 1.0)
 
 
+_LENGTH_UNITS: tuple[tuple[str, float], ...] = (
+    ("millimeter", 1e3),
+    ("micrometer", 1.0),
+    ("nanometer", 1e-3),
+    ("picometer", 1e-6),
+    ("femtometer", 1e-9),
+)
+"""bioimageio.spec `SpaceUnit`s panseg may declare, with their size in micrometers."""
+
+_MAX_AXIS_SIZE = 2**20
+"""Largest axis size for which `_exact_scale` guarantees exact size arithmetic."""
+
+
+def _exact_scale(resolution: float) -> tuple[float, str]:
+    """Express a voxel size in micrometers as an exactly representable scale/unit pair.
+
+    bioimageio.spec computes axis sizes with float expressions like
+    `size * scale_in / scale_out`, and validates test tensors by *exact* float
+    equality of the result (see `SizeReference.get_size` and the `test_tensor`
+    validation in `bioimageio.spec.model.v0_5`). For scales such as 0.24 this is
+    inexact (`43 * 0.24 / 0.24` evaluates to 42.999...), so such a description
+    rejects valid test tensors at construction time and reports wrong expected
+    output shapes in `bioimageio.core.test_model`.
+
+    Integer scales make `size * scale` exactly representable for every plausible
+    size, so all these computations return exact integers. We therefore express
+    the voxel size as an integer count of a finer unit (0.24 micrometer becomes
+    240 nanometer); the physical length is unchanged. Voxel sizes that are exact
+    as floats themselves (e.g. 0.5, 1.0) are kept in micrometers.
+    """
+    # a float is `numerator / 2**j`; `size * resolution` is exact for all sizes
+    # up to _MAX_AXIS_SIZE as long as the numerator stays below 2**53 / _MAX_AXIS_SIZE
+    if Fraction(resolution).numerator < 2**53 // _MAX_AXIS_SIZE:
+        return resolution, "micrometer"
+
+    for unit, micrometers_per_unit in _LENGTH_UNITS:
+        value = resolution / micrometers_per_unit
+        rounded = round(value)
+        if rounded >= 1 and abs(value - rounded) <= 1e-9 * max(1.0, abs(value)):
+            return float(rounded), unit
+
+    logger.warning(
+        "Voxel size %s micrometers cannot be represented exactly as a bioimageio"
+        " axis scale; model export or validation may fail",
+        resolution,
+    )
+    return resolution, "micrometer"
+
+
 def _make_cover(test_in: np.ndarray, test_out: np.ndarray) -> Path:
     """Render an input | output cover image from the test tensors.
 
@@ -160,6 +213,7 @@ def make_model_description(
     in_channels: int,
     out_channels: int,
     feature_maps: int | list[int] | tuple[int, ...],
+    final_sigmoid: bool,
     axis_min_sizes: tuple[int, int, int],
     dimensionality: Literal["2D", "3D"],
     layer_order: str,
@@ -176,6 +230,12 @@ def make_model_description(
     documentation: str | None = None,
 ):
 
+    # input and output axes share the same scale/unit pair: the output axis sizes
+    # are declared as SizeReferences to the input axes
+    (z_scale, z_unit), (y_scale, y_unit), (x_scale, x_unit) = (
+        _exact_scale(r) for r in resolution
+    )
+
     if dimensionality == "3D":
         in_axes = [
             BatchAxis(),
@@ -185,20 +245,20 @@ def make_model_description(
             SpaceInputAxis(
                 id=AxisId("z"),
                 size=ParameterizedSize(min=axis_min_sizes[0], step=1),
-                scale=resolution[0],
-                unit="micrometer",
+                scale=z_scale,
+                unit=z_unit,
             ),
             SpaceInputAxis(
                 id=AxisId("y"),
                 size=ParameterizedSize(min=axis_min_sizes[1], step=1),
-                scale=resolution[1],
-                unit="micrometer",
+                scale=y_scale,
+                unit=y_unit,
             ),
             SpaceInputAxis(
                 id=AxisId("x"),
                 size=ParameterizedSize(min=axis_min_sizes[2], step=1),
-                scale=resolution[2],
-                unit="micrometer",
+                scale=x_scale,
+                unit=x_unit,
             ),
         ]
     elif dimensionality == "2D":
@@ -210,14 +270,14 @@ def make_model_description(
             SpaceInputAxis(
                 id=AxisId("y"),
                 size=ParameterizedSize(min=axis_min_sizes[1], step=1),
-                scale=resolution[1],
-                unit="micrometer",
+                scale=y_scale,
+                unit=y_unit,
             ),
             SpaceInputAxis(
                 id=AxisId("x"),
                 size=ParameterizedSize(min=axis_min_sizes[2], step=1),
-                scale=resolution[2],
-                unit="micrometer",
+                scale=x_scale,
+                unit=x_unit,
             ),
         ]
     else:
@@ -241,20 +301,20 @@ def make_model_description(
             SpaceOutputAxis(
                 id=AxisId("z"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("z")),
-                scale=resolution[0],
-                unit="micrometer",
+                scale=z_scale,
+                unit=z_unit,
             ),
             SpaceOutputAxis(
                 id=AxisId("y"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("y")),
-                scale=resolution[1],
-                unit="micrometer",
+                scale=y_scale,
+                unit=y_unit,
             ),
             SpaceOutputAxis(
                 id=AxisId("x"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("x")),
-                scale=resolution[2],
-                unit="micrometer",
+                scale=x_scale,
+                unit=x_unit,
             ),
         ]
     elif dimensionality == "2D":
@@ -266,14 +326,14 @@ def make_model_description(
             SpaceOutputAxis(
                 id=AxisId("y"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("y")),
-                scale=resolution[1],
-                unit="micrometer",
+                scale=y_scale,
+                unit=y_unit,
             ),
             SpaceOutputAxis(
                 id=AxisId("x"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("x")),
-                scale=resolution[2],
-                unit="micrometer",
+                scale=x_scale,
+                unit=x_unit,
             ),
         ]
 
@@ -299,6 +359,7 @@ def make_model_description(
             "in_channels": in_channels,
             "out_channels": out_channels,
             "f_maps": feature_maps,
+            "final_sigmoid": final_sigmoid,
             "layer_order": layer_order,
         },
     )

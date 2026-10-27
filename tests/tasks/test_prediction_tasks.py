@@ -236,6 +236,7 @@ def test_biio_prediction_task_mock_model_parameterized(tmp_path):
             in_channels=1,
             out_channels=1,
             feature_maps=[8, 16],
+            final_sigmoid=MOCK_UNET_KWARGS["final_sigmoid"],
             axis_min_sizes=(16, 32, 64),
             dimensionality="3D",
             layer_order="bcr",

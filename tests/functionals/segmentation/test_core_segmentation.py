@@ -237,7 +237,7 @@ def test_sysconf_first_falls_back_to_alternate_names(monkeypatch):
             raise ValueError(name)
         return values[name]
 
-    monkeypatch.setattr(os, "sysconf", fake_sysconf)
+    monkeypatch.setattr(os, "sysconf", fake_sysconf, raising=False)
     assert _sysconf_first("SC_AVPHYS_PAGES", "SC_PHYS_PAGES") == 100
     assert _sysconf_first("SC_PAGE_SIZE", "SC_PAGESIZE") == 4096
     assert _sysconf_first("SC_NOT_A_NAME") is None

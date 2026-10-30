@@ -329,21 +329,36 @@ def find_feasible_patch_and_halo_shapes(
     )
 
 
+def _probe_batch(model: nn.Module, x: torch.Tensor, for_training: bool) -> None:
+    """Run one forward (inference) or forward+backward (training) probe."""
+    if for_training:
+        with torch.enable_grad():
+            model(x).sum().backward()
+    else:
+        with torch.no_grad():
+            model(x)
+
+
 def find_batch_size(
     model: nn.Module,
     in_channels: int,
     patch_shape: tuple[int, int, int],
     patch_halo: tuple[int, int, int],
     device: str,
+    for_training: bool = False,
 ) -> int:
     """Determine the maximum feasible batch size for a given model based on available GPU memory.
 
     Args:
-        model (nn.Module): The model to be used for prediction.
+        model (nn.Module): The model to be used for prediction or training.
         in_channels (int): Number of input channels to the model.
         patch_shape (tuple[int, int, int]): Dimensions of the input patches.
         patch_halo (tuple[int, int, int]): Halo size used for patch augmentation.
         device (str): Device to perform the computation on ('cuda' or 'cpu').
+        for_training (bool): If True, probe with forward *and* backward passes.
+            Training needs roughly 2-3 times the memory of a forward pass, so a
+            forward-only probe overestimates the batch size.
+            Defaults to False (inference).
 
     Returns:
         int: The largest batch size that can be used without causing memory overflow.
@@ -355,36 +370,40 @@ def find_batch_size(
     if isinstance(model, UNet2D):
         actual_patch_shape = actual_patch_shape[1:]
 
+    was_training = model.training
     with _quiet_oom_probing(device):
         model = model.to(device)
-        model.eval()
-        with torch.no_grad():
-            for batch_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]:
-                x = None
-                try:
-                    x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(
-                        device
+        model.train(for_training)
+        for batch_size in [2**i for i in range(12)]:
+            x = None
+            try:
+                x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(
+                    device
+                )
+                _probe_batch(model, x, for_training)
+            except RuntimeError as e:
+                if _is_oom_error(e, device):
+                    errs = str(e).split(".", maxsplit=1)
+                    logger.info(
+                        f"Encountered '{errs[0]}' at batch size {batch_size}, halving it."
                     )
-                    _ = model(x)
-                except RuntimeError as e:
-                    if _is_oom_error(e, device):
-                        errs = str(e).split(".", maxsplit=1)
-                        logger.info(
-                            f"Encountered '{errs[0]}' at batch size {batch_size}, halving it."
-                        )
-                        logger.debug(f"{errs[-1]}")
-                        batch_size //= 2
-                        break
-                    else:
-                        logger.warning(
-                            f"Encountered '{e}' at batch size {batch_size}, "
-                            "unexpected but continuing with halved batch size."
-                        )
-                        batch_size //= 2
-                        break
-                finally:
-                    del x
-                    torch.cuda.empty_cache()
+                    logger.debug(f"{errs[-1]}")
+                    batch_size //= 2
+                    break
+                else:
+                    logger.warning(
+                        f"Encountered '{e}' at batch size {batch_size}, "
+                        "unexpected but continuing with halved batch size."
+                    )
+                    batch_size //= 2
+                    break
+            finally:
+                if for_training:
+                    # drop the probe's gradients, they must not leak into training
+                    model.zero_grad(set_to_none=True)
+                del x
+                torch.cuda.empty_cache()
+        model.train(was_training)
         del model
         torch.cuda.empty_cache()
         if batch_size == 0:

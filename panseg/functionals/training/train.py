@@ -24,7 +24,7 @@ from panseg.functionals.training.biio import make_model_description
 from panseg.functionals.training.h5dataset import HDF5Dataset
 from panseg.functionals.training.losses import DiceLoss
 from panseg.functionals.training.model import UNet2D, UNet3D
-from panseg.functionals.training.trainer import UNetTrainer
+from panseg.functionals.training.trainer import UNetTrainer, load_pretrained_weights
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def create_model_config(
     )
     train_template["loaders"]["train"]["slice_builder"]["patch_shape"] = patch_size
     train_template["loaders"]["train"]["slice_builder"]["stride_shape"] = [
-        i // 2 for i in patch_size
+        max(i // 2, 1) for i in patch_size
     ]
     train_template["loaders"]["val"]["slice_builder"]["patch_shape"] = patch_size
     train_template["loaders"]["val"]["slice_builder"]["stride_shape"] = patch_size
@@ -116,9 +116,71 @@ def unet_training(
     license: str | None = None,
     documentation: str | None = None,
 ) -> None:
+    """Train a new UNet model; the main entrypoint behind ``panseg --train``.
+
+    Instantiates the 2D/3D UNet (optionally loading ``pre_trained`` weights for
+    fine-tuning), builds train/val loaders from the h5 files in
+    ``dataset_dir/<train|val>``, and runs `UNetTrainer` with a `DiceLoss`,
+    saving checkpoints under ``PATH_PANSEG_MODELS / model_name``. After training,
+    the model is registered in the model zoo and packaged as a bioimage.io model.
+
+    Args:
+        dataset_dir: directory containing the training data; must have a
+            ``train`` and a ``val`` subdirectory, each holding `h5` files that
+            store the input image under ``raw`` and a channel-less segmentation
+            under ``label``. Validation is skipped if ``val`` holds no files.
+        model_name: name of the new model, shown in the model selection. The
+            checkpoints, training config, and packaged model are written to
+            ``PATH_PANSEG_MODELS / model_name``, which must not exist yet.
+            At least 5 characters.
+        in_channels: number of channels of the input images (the data is
+            checked against this count).
+        out_channels: deprecated, always 1.
+            number of predicted output channels, i.e. the number of
+            semantic classes the model learns to predict.
+        feature_maps: model capacity: number of feature maps in the first
+            encoder level; deeper levels follow the geometric progression
+            ``f^k`` with k=1..4. A sequence defines each encoder level size explicitly.
+        patch_size: training patch shape ``(z, y, x)``. Training patches are
+            extracted with half the patch shape as stride (overlapping), val
+            patches without overlap. The z-extent must be ``1`` for 2D models.
+        max_num_iters: maximum number of training iterations.
+        dimensionality: whether to train a 2D or 3D UNet (also accepts
+            ``"2d"``/``"2"`` and ``"3d"``/``"3"``). With 2D training on
+            volumetric data, training happens per z-slice.
+        sparse: whether the targets are sparse (e.g. affinity data); if True,
+            the trained model outputs raw values (no final sigmoid).
+        device: device to train on, e.g. ``"cuda:0"`` or ``"cpu"``. The batch
+            size is fitted automatically to the device's memory; on machines
+            with multiple GPUs, data parallel training is used.
+        modality: imaging modality of the training data (e.g. ``"confocal"``),
+            recorded in the model zoo metadata.
+        output_type: what the model predicts (e.g. ``"boundaries"``,
+            ``"cell segmentation"``), recorded in the model zoo metadata.
+        description: short free-text description recorded in the model zoo metadata
+            and in the packaged model description.
+        resolution: voxel size ``(z, y, x)`` of the training data in
+            micrometers, declared as the spatial scale of the packaged model.
+        pre_trained: optional path to a `torch` checkpoint for fine-tuning;
+            its architecture (channels, feature maps, layer order) must match
+            the configured model.
+        layer_order: composition of the network's conv blocks as one-letter
+            codes (``b``/``g`` batch/group norm, ``c`` conv, ``r``/``l``/``e``
+            ReLU/LeakyReLU/ELU), e.g. ``"bcr"`` = batchnorm+conv+ReLU.
+        authors: model authors, one entry per author, either ``"Name"`` or
+            ``"Name <email>"``; recorded in the packaged model metadata.
+        additional_citations: citations added alongside PanSeg's built-in
+            citation, one per entry: ``"<DOI or URL> [free text]"``.
+        license: license under which the packaged model is published.
+        documentation: markdown text packaged as the model's README
+            documentation.
     """
-    Main entrypoint for training a new unet model. Gets called when calling `panseg --train` from cli.
-    """
+    if dimensionality in ["2D", "2d", "2"] and patch_size[0] != 1:
+        raise ValueError(
+            "2D models train per z-slice; patch z-extent must be 1, "
+            f"but got patch_size {tuple(patch_size)}."
+        )
+
     # Model instantiation and logging
     final_sigmoid = not sparse
     if dimensionality in ["2D", "2d", "2"]:
@@ -141,6 +203,11 @@ def unet_training(
         raise ValueError(f"Unknown dimensionality {dimensionality}")
     logger.info(f"Using {model.__class__.__name__} model for training.")
 
+    # Load fine-tuning weights into the unwrapped model before any
+    # nn.DataParallel wrapping, otherwise the state dict keys mismatch
+    if pre_trained is not None:
+        load_pretrained_weights(model, pre_trained)
+
     # Device configuration
     batch_size = find_batch_size(
         model=model,
@@ -148,6 +215,7 @@ def unet_training(
         patch_shape=patch_size,
         patch_halo=(4, 4, 4),  # some slack
         device=device,
+        for_training=True,  # backward passes need ~2-3x the memory of a forward
     )
 
     if torch.cuda.device_count() > 1 and device != "cpu":
@@ -161,8 +229,12 @@ def unet_training(
 
     # Data loaders setup
     logger.info(f"Creating train/val loaders with batch size {batch_size}")
-    train_datasets = create_datasets(dataset_dir, "train", patch_size, dimensionality)
-    val_datasets = create_datasets(dataset_dir, "val", patch_size, dimensionality)
+    train_datasets = create_datasets(
+        dataset_dir, "train", patch_size, dimensionality, in_channels=in_channels
+    )
+    val_datasets = create_datasets(
+        dataset_dir, "val", patch_size, dimensionality, in_channels=in_channels
+    )
     loaders = {
         "train": DataLoader(
             ConcatDataset(train_datasets),
@@ -204,7 +276,6 @@ def unet_training(
         pre_trained=pre_trained,
     )
 
-    # Trainer initialization and execution
     trainer = UNetTrainer(
         model=model,
         optimizer=optimizer,
@@ -214,7 +285,6 @@ def unet_training(
         checkpoint_dir=checkpoint_dir,
         max_num_iterations=max_num_iters,
         device=device,
-        pre_trained=pre_trained,
     )
 
     trainer.train()
@@ -300,6 +370,7 @@ def create_datasets(
     phase: Literal["train", "val"],
     patch_shape: tuple[int, int, int],
     dimensionality: Literal["2D", "3D"],
+    in_channels: Optional[int] = None,
 ):
     """
     Load a dataset for training a unet.
@@ -308,19 +379,28 @@ def create_datasets(
         data_dir (str): Must contain a train and a val folder, which inturn contain .h5 files.
         phase: Whether to load train or val.
         patch_shape (tuple): shape of the patch to be extracted from the raw data set
+        in_channels (Optional[int]): expected number of raw channels. When given,
+            each dataset's raw channel count is checked against it.
     """
     assert phase in ["train", "val"], f"Phase {phase} not supported"
     phase_dir = Path(dataset_dir) / phase
     file_paths = find_h5_files(phase_dir)
-    return [
-        HDF5Dataset(
+    datasets = []
+    for file_path in file_paths:
+        dataset = HDF5Dataset(
             file_path=file_path,
             augmenter=Augmenter(),
             patch_shape=patch_shape,
             dimensionality=dimensionality,
         )
-        for file_path in file_paths
-    ]
+        num_channels = dataset.raw.shape[0]
+        if in_channels is not None and num_channels != in_channels:
+            raise ValueError(
+                f"Raw dataset '{file_path}' has {num_channels} channels, "
+                f"but in_channels={in_channels} was configured."
+            )
+        datasets.append(dataset)
+    return datasets
 
 
 def find_h5_files(data_dir):

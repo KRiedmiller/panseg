@@ -489,6 +489,8 @@ class TestUnetTraining:
         assert mock_create_datasets.call_count == 2
 
         mock_model_desc.assert_called_once()
+        # validation runs on the training device (not the bioimageIO default)
+        assert mock_test_model.call_args.kwargs["devices"] == ["cpu"]
         assert (tmp_path / model_name / "test_in.npy").exists()
         assert (tmp_path / model_name / "test_out.npy").exists()
 
@@ -669,6 +671,77 @@ class TestUnetTraining:
         # ... and not from the last training state
         assert not np.allclose(test_out, last_out, atol=1e-3)
 
+    @patch("panseg.functionals.training.train.test_model")
+    @patch("panseg.functionals.training.train.make_model_description")
+    @patch("panseg.functionals.training.train.UNetTrainer")
+    @patch("panseg.functionals.training.train.create_datasets")
+    @patch("panseg.functionals.training.train.create_model_config")
+    @patch("panseg.functionals.training.train.find_batch_size")
+    @patch("panseg.functionals.training.train.DataLoader")
+    @patch("panseg.functionals.training.train.ConcatDataset")
+    def test_test_tensors_hold_a_single_sample(
+        self,
+        mock_concat,
+        mock_data_loader,
+        mock_find_batch_size,
+        mock_create_config,
+        mock_create_datasets,
+        mock_trainer,
+        mock_model_desc,
+        mock_test_model,
+        tmp_path,
+    ):
+        """The packaged test tensors hold one sample, whatever the batch size.
+
+        The training batch is fitted to the device memory; the bioimageIO test
+        tensors must stay single-sample (one sample is all bioimageIO needs,
+        and it keeps the package small).
+        """
+        mock_dataset = MagicMock()
+        mock_dataset.__len__.return_value = 10
+        mock_create_datasets.return_value = [mock_dataset]
+        mock_create_config.side_effect = create_model_config
+
+        mock_trainer_instance = MagicMock()
+        mock_trainer.return_value = mock_trainer_instance
+        model_name = "test_model_batch"
+        _write_checkpoints(mock_trainer, tmp_path / model_name)
+
+        batch = torch.from_numpy(
+            np.random.rand(2, 1, 1, 64, 64).astype("float32")  # b, c, z, y, x
+        )
+        mock_data_loader.return_value = [(batch, None)]
+        mock_find_batch_size.return_value = 2
+
+        dataset_dir = tmp_path / "dataset"
+        (dataset_dir / "train").mkdir(parents=True)
+        (dataset_dir / "val").mkdir()
+
+        with (
+            patch("panseg.functionals.training.train.PATH_PANSEG_MODELS", tmp_path),
+            patch("panseg.core.zoo.PATH_PANSEG_MODELS", tmp_path),
+        ):
+            unet_training(
+                dataset_dir=str(dataset_dir),
+                model_name=model_name,
+                in_channels=1,
+                out_channels=1,
+                feature_maps=(2, 2),
+                patch_size=(1, 64, 64),
+                max_num_iters=100,
+                dimensionality="2D",
+                sparse=False,
+                device="cpu",
+            )
+
+        checkpoint_dir = tmp_path / model_name
+        test_in = np.load(checkpoint_dir / "test_in.npy")
+        test_out = np.load(checkpoint_dir / "test_out.npy")
+        assert test_in.shape == (1, 1, 64, 64)
+        assert test_out.shape == (1, 1, 64, 64)
+        # the sample is the first of the training batch, stored un-normalized
+        assert np.array_equal(test_in, batch[:1].squeeze(dim=-3).numpy())
+
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
     @patch("panseg.functionals.training.train.create_model_config")
@@ -818,6 +891,9 @@ class TestUnetTraining:
 
         # Verify that DataParallel was called
         mock_data_parallel.assert_called_once()
+
+        # validation is pinned to the training device (not the bioimageIO default)
+        assert mock_test_model.call_args.kwargs["devices"] == ["cuda"]
 
         # Verify that Adam optimizer was called
         mock_adam.assert_called_once()
@@ -1265,3 +1341,50 @@ class TestUNetTrainerForwardPass:
 
         assert output.shape == (1, 1, 16, 16, 16)
         assert torch.isfinite(loss)
+
+
+class TestUNetTrainerCleanup:
+    """`cleanup()` frees the resources held after training and is idempotent."""
+
+    @staticmethod
+    def _trained_trainer(tmp_path):
+        """A trainer that has seen one optimization step (Adam state allocated)."""
+        model = UNet2D(in_channels=1, out_channels=1, f_maps=[4, 4])
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+        model(torch.rand(1, 1, 32, 32)).sum().backward()
+        optimizer.step()
+
+        return UNetTrainer(
+            model=model,
+            optimizer=optimizer,
+            lr_scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, factor=0.2, patience=10
+            ),
+            loss_criterion=DiceLoss(),
+            loaders={"train": [None, None], "val": []},
+            checkpoint_dir=tmp_path,
+            max_num_iterations=10,
+            device="cpu",
+        )
+
+    def test_cleanup_frees_training_resources(self, tmp_path):
+        trainer = self._trained_trainer(tmp_path)
+        optimizer = trainer.optimizer
+        # precondition: the Adam step allocated its moment buffers
+        assert len(optimizer.state) > 0
+
+        trainer.cleanup()
+
+        assert len(optimizer.state) == 0
+        assert trainer.writer is None  # closed and dropped
+        assert trainer.loaders == {}
+        assert all(p.device.type == "cpu" for p in trainer.model.parameters())
+
+    def test_cleanup_is_idempotent(self, tmp_path, mocker):
+        writer_cls = mocker.patch("panseg.functionals.training.trainer.SummaryWriter")
+        trainer = self._trained_trainer(tmp_path)
+
+        trainer.cleanup()
+        trainer.cleanup()  # must not raise or double-close
+
+        writer_cls.return_value.close.assert_called_once()

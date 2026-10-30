@@ -1,3 +1,4 @@
+import gc
 import logging
 from contextlib import chdir
 from pathlib import Path
@@ -48,6 +49,45 @@ def zero_mean_unit_variance(x: _T) -> _T:
     return (x - mean) / (std + ZMUV_EPS)
 
 
+def _resolve_unet_class(dimensionality: str) -> type[UNet2D] | type[UNet3D]:
+    """Map the configured dimensionality to its UNet class.
+
+    Accepts ``"2D"``/``"2d"``/``"2"`` and ``"3D"``/``"3d"``/``"3"``.
+
+    Raises:
+        ValueError: for any other spelling.
+    """
+    if dimensionality in ["2D", "2d", "2"]:
+        return UNet2D
+    elif dimensionality in ["3D", "3d", "3"]:
+        return UNet3D
+    else:
+        raise ValueError(f"Unknown dimensionality {dimensionality}")
+
+
+def create_model(
+    dimensionality: Literal["2D", "3D"],
+    in_channels: int,
+    out_channels: int,
+    feature_maps: int | list[int] | tuple[int, ...],
+    final_sigmoid: bool,
+    layer_order: str = "bcr",
+) -> UNet2D | UNet3D:
+    """Instantiate the configured UNet architecture.
+
+    Used both for the training model and for the fresh CPU instance that
+    generates the bioimageIO test tensors from the packaged weights.
+    """
+    model_class = _resolve_unet_class(dimensionality)
+    return model_class(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        f_maps=feature_maps,
+        final_sigmoid=final_sigmoid,
+        layer_order=layer_order,
+    )
+
+
 def create_model_config(
     checkpoint_dir: Path,
     in_channels,
@@ -70,12 +110,7 @@ def create_model_config(
     train_template["model"]["out_channels"] = out_channels
     train_template["model"]["layer_order"] = layer_order
     train_template["model"]["f_maps"] = f_maps
-    if dimensionality in ["2D", "2d", "2"]:
-        train_template["model"]["name"] = "UNet2D"
-    elif dimensionality in ["3D", "3d", "3"]:
-        train_template["model"]["name"] = "UNet3D"
-    else:
-        raise ValueError(f"Unknown dimensionality {dimensionality}")
+    train_template["model"]["name"] = _resolve_unet_class(dimensionality).__name__
     train_template["model"]["final_sigmoid"] = not sparse
     train_template["trainer"]["checkpoint_dir"] = str(checkpoint_dir)
     train_template["trainer"]["max_num_iterations"] = max_num_iters
@@ -183,24 +218,14 @@ def unet_training(
 
     # Model instantiation and logging
     final_sigmoid = not sparse
-    if dimensionality in ["2D", "2d", "2"]:
-        model = UNet2D(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            f_maps=feature_maps,
-            final_sigmoid=final_sigmoid,
-            layer_order=layer_order,
-        )
-    elif dimensionality in ["3D", "3d", "3"]:
-        model = UNet3D(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            f_maps=feature_maps,
-            final_sigmoid=final_sigmoid,
-            layer_order=layer_order,
-        )
-    else:
-        raise ValueError(f"Unknown dimensionality {dimensionality}")
+    model = create_model(
+        dimensionality,
+        in_channels,
+        out_channels,
+        feature_maps,
+        final_sigmoid,
+        layer_order,
+    )
     logger.info(f"Using {model.__class__.__name__} model for training.")
 
     # Load fine-tuning weights into the unwrapped model before any
@@ -316,10 +341,20 @@ def unet_training(
     if not weights.exists():
         weights = checkpoint_dir / "last_checkpoint.pytorch"
 
-    # Generate the test tensors from the weights that are packaged below
-    net = model.module if isinstance(model, nn.DataParallel) else model
-    del model
-    net.load_state_dict(torch.load(weights, map_location="cpu"))
+    # Generate the test tensors from the weights that are packaged below, on a
+    # fresh instance of the same architecture. Working on CPU under `no_grad`
+    # keeps the tensors numerically deterministic and frees the training model
+    # and device from any involvement here.
+    net = create_model(
+        dimensionality,
+        in_channels,
+        out_channels,
+        feature_maps,
+        final_sigmoid,
+        layer_order,
+    )
+    net.load_state_dict(torch.load(weights, map_location="cpu", weights_only=True))
+    net.eval()
 
     # Obtain and save test in- and output for biio.
     # test_in is stored un-normalized: the model description declares
@@ -330,6 +365,8 @@ def unet_training(
     # training loader here would (re)spawn its worker processes for one batch.
     test_loader = DataLoader(ConcatDataset(train_datasets), batch_size=batch_size)
     test_in, _ = next(iter(test_loader))
+    # bioimageIO needs a single sample; keep the packaged tensors small
+    test_in = test_in[:1]
 
     if isinstance(net, UNet2D):
         # remove the singleton z-dimension from the input
@@ -338,8 +375,8 @@ def unet_training(
         # Note the loader adds a batch dimension
         test_in = torch.squeeze(test_in, dim=-3)
 
-    net.eval()
-    test_out = net(zero_mean_unit_variance(test_in).to(device))
+    with torch.no_grad():
+        test_out = net(zero_mean_unit_variance(test_in))
 
     np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
     np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
@@ -350,6 +387,16 @@ def unet_training(
         )
     except ValueError:
         axis_min_sizes = patch_size
+
+    # Release everything the training run still holds before bioimageIO
+    # validation: `test_model` instantiates a second full model on the training
+    # device, which must not sit next to the training model and its optimizer
+    # state.
+    trainer.cleanup()
+    del model, net, optimizer
+    del loaders, test_loader, train_datasets, val_datasets, test_in, test_out
+    gc.collect()
+    torch.cuda.empty_cache()
 
     with chdir(checkpoint_dir):
         model_desc = make_model_description(
@@ -374,7 +421,7 @@ def unet_training(
             license=license,
             documentation=documentation,
         )
-        test_model(model_desc).display()
+        test_model(model_desc, devices=[device]).display()
         model_desc.package(
             checkpoint_dir
             / f"biio_model_{''.join(c for c in model_name if c.isalnum())}.zip"

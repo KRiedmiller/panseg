@@ -157,6 +157,12 @@ class TestUnetTrainingIntegration:
         assert (model_dir / "test_in.npy").exists()
         assert (model_dir / "test_out.npy").exists()
 
+        test_in = np.load(model_dir / "test_in.npy")
+        test_out = np.load(model_dir / "test_out.npy")
+        # the packaged test tensors hold a single sample: b, c, z, y, x
+        assert test_in.shape == (1, 1, 16, 64, 64)
+        assert test_out.shape == (1, 1, 16, 64, 64)
+
         mocker.stopall()
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -208,6 +214,12 @@ class TestUnetTrainingIntegration:
 
         assert (model_dir / "test_in.npy").exists()
         assert (model_dir / "test_out.npy").exists()
+
+        test_in = np.load(model_dir / "test_in.npy")
+        test_out = np.load(model_dir / "test_out.npy")
+        # single sample even though the GPU training batch may be larger
+        assert test_in.shape == (1, 1, 16, 64, 64)
+        assert test_out.shape == (1, 1, 16, 64, 64)
 
         mocker.stopall()
         assert not (PATH_PANSEG_MODELS / model_name).exists()

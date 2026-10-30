@@ -229,6 +229,17 @@ def unet_training(
 
     # Data loaders setup
     logger.info(f"Creating train/val loaders with batch size {batch_size}")
+    # Worker processes only pay off on GPU training: the compute runs
+    # on the GPU while the workers prefetch the next batch in parallel. For cpu
+    # training they are pure overhead and costs seconds per
+    # worker on windows/macOS (spawn, no fork). In-process loading is then
+    # also the fastest option. The workers are kept alive across epochs
+    # (`persistent_workers`) for the same reason: respawning them per epoch
+    # re-imports the whole chain and re-pickles the in-memory dataset.
+    if device == "cpu":
+        num_workers, pin_memory = 0, False
+    else:
+        num_workers, pin_memory = 2, True
     train_datasets = create_datasets(
         dataset_dir, "train", patch_size, dimensionality, in_channels=in_channels
     )
@@ -240,8 +251,9 @@ def unet_training(
             ConcatDataset(train_datasets),
             batch_size=batch_size,
             shuffle=True,
-            pin_memory=True,
-            num_workers=4,
+            pin_memory=pin_memory,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
         )
     }
     if len(val_datasets) > 0:
@@ -249,8 +261,9 @@ def unet_training(
             ConcatDataset(val_datasets),
             batch_size=batch_size,
             shuffle=False,
-            pin_memory=True,
-            num_workers=4,
+            pin_memory=pin_memory,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
         )
     else:
         loaders["val"] = []
@@ -313,7 +326,10 @@ def unet_training(
     # ZeroMeanUnitVariance preprocessing, which bioimageio.core applies to the test
     # tensor before inference. Apply the very same preprocessing here so that the
     # stored test_out corresponds to preprocess(test_in).
-    test_in, _ = next(iter(loaders["train"]))
+    # The batch is fetched with a dedicated worker-less loader: iterating the
+    # training loader here would (re)spawn its worker processes for one batch.
+    test_loader = DataLoader(ConcatDataset(train_datasets), batch_size=batch_size)
+    test_in, _ = next(iter(test_loader))
 
     if isinstance(net, UNet2D):
         # remove the singleton z-dimension from the input

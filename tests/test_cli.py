@@ -48,7 +48,7 @@ def test_launch_training_example_config(mock_check_version, mocker):
     assert kwargs["dataset_dir"] == "TRAIN_DIR"
     assert kwargs["model_name"] == "custom_model"
     assert kwargs["in_channels"] == 1
-    assert kwargs["out_channels"] == 1
+    assert kwargs["out_channels"] == 2
     assert kwargs["feature_maps"] == [32, 64, 128, 256, 512]
     assert kwargs["patch_size"] == [80, 160, 160]
     assert kwargs["max_num_iters"] == 50000

@@ -15,36 +15,6 @@ from panseg.functionals.training.utils import RunningAverage
 logger = logging.getLogger(__name__)
 
 
-def load_pretrained_weights(model: nn.Module, pre_trained: Path) -> None:
-    """Load pre-trained weights into `model` for fine-tuning.
-
-    Tolerates checkpoints wrapped in a ``{"model_state_dict": ...}`` dict (like
-    `prediction.py` does) and models wrapped in ``nn.DataParallel`` (the weights
-    are loaded into the unwrapped module).
-
-    Args:
-        model (nn.Module): model to load the weights into
-        pre_trained (Path): path to the pre-trained model weights
-
-    Raises:
-        ValueError: if the checkpoint cannot be loaded, likely because its
-            architecture or number of channels does not match the model.
-    """
-    logger.info(f"Loading pre-trained model from '{pre_trained}'...")
-    state = torch.load(pre_trained, map_location="cpu", weights_only=True)
-    if "model_state_dict" in state:  # Model weights format may vary between versions
-        state = state["model_state_dict"]
-    net = model.module if isinstance(model, nn.DataParallel) else model
-    try:
-        net.load_state_dict(state)
-    except RuntimeError as e:
-        raise ValueError(
-            f"Failed to load pre-trained weights from '{pre_trained}': {e}. "
-            "The checkpoint likely has a different architecture or a different "
-            "number of channels than the configured model."
-        ) from e
-
-
 class UNetTrainer:
     """UNet trainer.
 
@@ -58,6 +28,7 @@ class UNetTrainer:
         max_num_iterations (int): maximum number of iterations
         device (str): device to use for training
         log_after_iters (int): number of iterations before logging to tensorboard
+        pre_trained(str): path to the pre-trained model
     """
 
     def __init__(
@@ -71,6 +42,7 @@ class UNetTrainer:
         max_num_iterations: int,
         device: str = "cuda",
         log_after_iters: int = 100,
+        pre_trained: Path | None = None,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -85,6 +57,10 @@ class UNetTrainer:
         self.best_eval_loss = float("+inf")
 
         self.num_iterations = 1
+        if pre_trained is not None:
+            logger.info(f"Logging pre-trained model from '{pre_trained}'...")
+            state = torch.load(pre_trained, map_location="cpu")
+            self.model.load_state_dict(state)
 
         # init tensorboard logger
         self.writer = SummaryWriter(log_dir=checkpoint_dir / "logs")
@@ -196,10 +172,7 @@ class UNetTrainer:
     def _forward_pass(
         self, _input: torch.Tensor, target: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        model = (
-            self.model.module if isinstance(self.model, nn.DataParallel) else self.model
-        )
-        if isinstance(model, UNet2D):
+        if isinstance(self.model, UNet2D):
             # remove the singleton z-dimension from the input
             _input = torch.squeeze(_input, dim=-3)
             # forward pass

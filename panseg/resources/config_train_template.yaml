@@ -29,7 +29,7 @@ lr_scheduler:
   patience: 10
 trainer:
   checkpoint_dir: CHECKPOINT_DIR
-  # path to the pretrained weights (e.g. best_checkpoint.pytorch); to be used for fine-tuning the model with additional ground truth
+  # path to the best_checkpoint.pytorch; to be used for fine-tuning the model with additional ground truth
   pre_trained: null
   # how many iterations between tensorboard logging
   log_after_iters: 500
@@ -53,9 +53,9 @@ loaders:
     slice_builder:
       name: FilterSliceBuilder
       # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
-      patch_shape: [80, 160, 160]
+      patch_shape: [ 80, 160, 160 ]
       # train stride between patches
-      stride_shape: [40, 80, 80]
+      stride_shape: [ 40, 80, 80 ]
       # minimum volume of the labels in the patch
       threshold: 0.1
       # probability of accepting patches which do not fulfil the threshold criterion
@@ -71,9 +71,9 @@ loaders:
     slice_builder:
       name: FilterSliceBuilder
       # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
-      patch_shape: [80, 160, 160]
+      patch_shape: [ 80, 160, 160 ]
       # train stride between patches
-      stride_shape: [80, 160, 160]
+      stride_shape: [ 80, 160, 160 ]
       # minimum volume of the labels in the patch
       threshold: 0.1
       # probability of accepting patches which do not fulfil the threshold criterion

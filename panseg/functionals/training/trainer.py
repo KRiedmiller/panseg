@@ -101,7 +101,8 @@ class UNetTrainer:
             # evaluate on validation set
             eval_loss = self.validate()
             logger.info(f"Val Loss: {eval_loss}.")
-            self.writer.add_scalar("Loss/val", eval_loss, self.num_iterations)
+            if self.writer is not None:
+                self.writer.add_scalar("Loss/val", eval_loss, self.num_iterations)
             # set the model back to training mode
             self.model.train()
 
@@ -151,9 +152,10 @@ class UNetTrainer:
             if self.num_iterations % self.log_after_iters == 0:
                 # log stats, params and images
                 logger.info(f"Train Loss: {train_losses.avg}.")
-                self.writer.add_scalar(
-                    "Loss/train", train_losses.avg, self.num_iterations
-                )
+                if self.writer is not None:
+                    self.writer.add_scalar(
+                        "Loss/train", train_losses.avg, self.num_iterations
+                    )
 
                 if self.should_stop():
                     return True
@@ -227,6 +229,24 @@ class UNetTrainer:
             logger.info("Saving best checkpoint")
             best_file_path = self.checkpoint_dir / "best_checkpoint.pytorch"
             shutil.copyfile(last_file_path, best_file_path)
+
+    def cleanup(self) -> None:
+        """Release the resources held after training.
+
+        Closes the tensorboard writer, drops the optimizer state (Adam keeps
+        two moment buffers per parameter, doubling the training footprint),
+        moves the model back to CPU and drops the loader references. Call this
+        before any large allocation that follows training (e.g. the bioimageIO
+        model validation); together with dropping the caller's references and
+        ``torch.cuda.empty_cache()`` it frees the GPU memory of the training
+        run. Idempotent: repeated calls do nothing further.
+        """
+        if self.writer is not None:
+            self.writer.close()
+            self.writer = None
+        self.optimizer.state.clear()
+        self.model.to("cpu")
+        self.loaders = {}
 
     @staticmethod
     def _batch_size(_input):

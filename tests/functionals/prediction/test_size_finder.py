@@ -262,6 +262,24 @@ class _FakeDeviceTensor:
         return self
 
 
+class _FakeOutput:
+    """Stand-in for a model output: supports the `.sum().backward()` the
+    training-mode batch-size probe runs."""
+
+    def __init__(self, model, voxels):
+        self.model = model
+        self.voxels = voxels
+
+    def sum(self):
+        return self
+
+    def backward(self):
+        self.model.backward_calls += 1
+        threshold = self.model.backward_oom_threshold
+        if threshold is not None and self.voxels > threshold:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
+
+
 def _raise_fake_device_error(model, x):
     # in_channels is 1 in all these tests, so the total input size is the voxel count
     voxels = int(np.prod(x.shape))
@@ -272,7 +290,7 @@ def _raise_fake_device_error(model, x):
         raise RuntimeError("unexpected error, not an OOM")
     if model.oom_voxel_threshold is not None and voxels > model.oom_voxel_threshold:
         raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
-    return None
+    return _FakeOutput(model, voxels)
 
 
 class FakeUNet3D(UNet3D):
@@ -281,12 +299,18 @@ class FakeUNet3D(UNet3D):
     never moves the model to a real device. No forward pass ever runs."""
 
     def __init__(
-        self, oom_voxel_threshold=None, unexpected_error_above=None, failure=None
+        self,
+        oom_voxel_threshold=None,
+        unexpected_error_above=None,
+        failure=None,
+        backward_oom_threshold=None,
     ):
         super().__init__(1, 1, f_maps=8, num_levels=2)
         self.oom_voxel_threshold = oom_voxel_threshold
         self.unexpected_error_above = unexpected_error_above
         self.failure = failure
+        self.backward_oom_threshold = backward_oom_threshold
+        self.backward_calls = 0
         self.seen_input_shapes = []
 
     def to(self, *args, **kwargs):
@@ -303,12 +327,18 @@ class FakeUNet2D(UNet2D):
     """2D variant of `FakeUNet3D` so that `_is_2d_model` routes to the 2D code paths."""
 
     def __init__(
-        self, oom_voxel_threshold=None, unexpected_error_above=None, failure=None
+        self,
+        oom_voxel_threshold=None,
+        unexpected_error_above=None,
+        failure=None,
+        backward_oom_threshold=None,
     ):
         super().__init__(1, 1, f_maps=8, num_levels=2)
         self.oom_voxel_threshold = oom_voxel_threshold
         self.unexpected_error_above = unexpected_error_above
         self.failure = failure
+        self.backward_oom_threshold = backward_oom_threshold
+        self.backward_calls = 0
         self.seen_input_shapes = []
 
     def to(self, *args, **kwargs):
@@ -478,6 +508,38 @@ def test_find_batch_size_2d_model_slices_first_dim(fake_cuda):
 
     assert find_batch_size(model, 1, (1, 16, 16), (0, 0, 0), "cuda:0") == 64
     assert all(len(shape) == 4 for shape in model.seen_input_shapes)
+
+
+def test_find_batch_size_for_training_halves_on_backward_oom(fake_cuda):
+    # Forward fits up to batch 4 (16384 voxels), backward only batch 1 (4096).
+    # A forward-only probe would overestimate the training batch size.
+    model = FakeUNet3D(oom_voxel_threshold=20_000, backward_oom_threshold=5_000)
+
+    assert find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0") == 4
+    assert (
+        find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+        == 1
+    )
+    # the inference probe never runs backward; the training probe runs it for
+    # the fitting batch 1 and for the OOMing batch 2
+    assert model.backward_calls == 2
+
+
+def test_find_batch_size_for_training_runs_backward(fake_cuda):
+    model = FakeUNet3D()
+
+    find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+
+    assert model.backward_calls > 0
+
+
+def test_find_batch_size_restores_training_mode(fake_cuda):
+    model = FakeUNet3D()
+    model.eval()
+
+    find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+
+    assert not model.training
 
 
 def _patch_cuda_memory(monkeypatch, previous_fraction=1.0):

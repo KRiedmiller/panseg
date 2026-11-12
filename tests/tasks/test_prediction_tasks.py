@@ -30,9 +30,43 @@ from panseg.core.image import (
     SemanticType,
 )
 from panseg.functionals.training.biio import make_model_description
-from panseg.functionals.training.model import UNet3D
+from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.io.voxelsize import VoxelSize
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
+
+# Tiny local stand-ins for the zoo models used below. The task's contract
+# (layout, shape, semantic type) does not depend on the published weights, and
+# keeping them local keeps the default suite off Zenodo.
+LOCAL_ZOO_MODELS = {
+    "generic_confocal_3D_unet": (
+        UNet3D,
+        {
+            "in_channels": 1,
+            "out_channels": 1,
+            "final_sigmoid": True,
+            "f_maps": [8, 16],
+            "num_groups": 4,
+        },
+    ),
+    "confocal_2D_unet_ovules_ds2x": (
+        UNet2D,
+        {
+            "in_channels": 1,
+            "out_channels": 1,
+            "final_sigmoid": True,
+            "f_maps": [8, 16],
+            "num_groups": 4,
+        },
+    ),
+}
+
+
+@pytest.fixture
+def local_zoo_models(seed_zoo_models):
+    for name, (model_class, kwargs) in LOCAL_ZOO_MODELS.items():
+        seed_zoo_models(
+            name, model_class(**kwargs), {"name": model_class.__name__, **kwargs}
+        )
 
 
 @pytest.mark.parametrize(
@@ -42,7 +76,7 @@ from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_
         ((64, 64), ImageLayout.YX, "confocal_2D_unet_ovules_ds2x"),
     ],
 )
-def test_unet_prediction_task(shape, layout, model_name):
+def test_unet_prediction_task(shape, layout, model_name, local_zoo_models):
     mock_data = np.random.rand(*shape).astype("float32")
 
     property = ImageProperties(

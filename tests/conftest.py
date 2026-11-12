@@ -15,6 +15,7 @@ import torch
 import yaml
 from napari.layers import Image, Labels, Shapes
 
+from panseg import FILE_BEST_MODEL_PYTORCH, FILE_CONFIG_TRAIN_YAML
 from panseg.core.image import SemanticType
 from panseg.io.io import smart_load
 from panseg.io.tiff import create_tiff
@@ -28,6 +29,34 @@ IS_CUDA_AVAILABLE = torch.cuda.is_available()
 requires_cuda = pytest.mark.skipif(
     not IS_CUDA_AVAILABLE, reason="CUDA required for this test"
 )
+
+
+@pytest.fixture
+def seed_zoo_models(tmp_path, monkeypatch):
+    """Seed local stand-ins for zoo models and redirect PANSEG_MODELS to them.
+
+    Default-run tests must not download published models from Zenodo: the
+    shared CI egress IP occasionally gets a 403 from Zenodo's traffic filter.
+    ``check_models`` only downloads files that are missing, so writing a config
+    and checkpoint here keeps the real zoo code path without any network access.
+
+    Returns a ``seed(name, model, model_kwargs)`` factory. ``model_kwargs`` is
+    the model section of ``config_train.yml`` and must construct ``model``.
+    """
+    import panseg.core.zoo as zoo_module
+
+    monkeypatch.setattr(zoo_module, "PATH_PANSEG_MODELS", tmp_path)
+
+    def _seed(name: str, model: torch.nn.Module, model_kwargs: dict) -> Path:
+        model_dir = tmp_path / name
+        model_dir.mkdir()
+        (model_dir / FILE_CONFIG_TRAIN_YAML).write_text(
+            yaml.safe_dump({"model": model_kwargs})
+        )
+        torch.save(model.state_dict(), model_dir / FILE_BEST_MODEL_PYTORCH)
+        return model_dir
+
+    return _seed
 
 
 @pytest.fixture

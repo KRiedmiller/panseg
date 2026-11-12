@@ -1,5 +1,6 @@
 import pytest
 
+from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
 from panseg.viewer_napari.widgets.prediction import UNetPredictionMode
 from panseg.viewer_napari.widgets.segmentation import Segmentation_Tab
@@ -143,7 +144,58 @@ def test_widget_unet_prediction_bioimageio(segmentation_tab, mocker, napari_raw)
     mocked_log.assert_not_called()
 
 
-def test_update_halo(segmentation_tab):
+@pytest.fixture
+def halo_zoo_models(seed_zoo_models):
+    """Local models with the published architectures.
+
+    Rerunning the halo test does not need the published weights; using them
+    keeps the expected 44-voxel halos while avoiding Zenodo downloads.
+    """
+    seed_zoo_models(
+        "generic_confocal_3D_unet",
+        UNet3D(
+            in_channels=1,
+            out_channels=1,
+            final_sigmoid=True,
+            f_maps=32,
+            num_groups=8,
+            layer_order="gcr",
+        ),
+        {
+            "name": "UNet3D",
+            "in_channels": 1,
+            "out_channels": 1,
+            "final_sigmoid": True,
+            "f_maps": 32,
+            "num_groups": 8,
+            "layer_order": "gcr",
+        },
+    )
+    seed_zoo_models(
+        "confocal_2D_unet_ovules_ds2x",
+        UNet2D(
+            in_channels=1,
+            out_channels=1,
+            final_sigmoid=True,
+            f_maps=64,
+            num_groups=8,
+            layer_order="gcr",
+            is_segmentation=True,
+        ),
+        {
+            "name": "UNet2D",
+            "in_channels": 1,
+            "out_channels": 1,
+            "final_sigmoid": True,
+            "f_maps": 64,
+            "num_groups": 8,
+            "layer_order": "gcr",
+            "is_segmentation": True,
+        },
+    )
+
+
+def test_update_halo(segmentation_tab, halo_zoo_models):
     w_unet = segmentation_tab.prediction_widgets.widget_unet_prediction
     w_unet.advanced.value = True
     w_unet.manual_size.value = True
